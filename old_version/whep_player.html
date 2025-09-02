@@ -1,0 +1,140 @@
+<!doctype html>
+<html lang="vi">
+<head>
+  <meta charset="utf-8" />
+  <title>MediaMTX WHEP Player</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <style>
+    body { font-family: system-ui, sans-serif; margin: 24px; }
+    video { width: 100%; max-width: 960px; background: #000; }
+    .row { margin: 8px 0; }
+    label { display: block; font-weight: 600; margin-bottom: 4px; }
+    input { width: 100%; max-width: 640px; padding: 8px; }
+    button { padding: 10px 16px; font-weight: 600; cursor: pointer; }
+    .log { white-space: pre-wrap; background: #f7f7f7; padding: 8px; max-width: 960px;}
+  </style>
+</head>
+<body>
+  <h1>MediaMTX WebRTC (WHEP) Player</h1>
+
+  <div class="row">
+    <label>MediaMTX host (IP/Domain, có thể kèm port 8889 nếu không mặc định)</label>
+    <input id="host" value="PIB_PUBLIC_OR_DDNS:8889" />
+  </div>
+  <div class="row">
+    <label>Stream path</label>
+    <input id="path" value="mystream" />
+  </div>
+  <div class="row">
+    <label>TURN server (Pi A)</label>
+    <input id="turn" value="PIA_PUBLIC_IP:3478" />
+  </div>
+  <div class="row">
+    <label>TURN username</label>
+    <input id="turnUser" value="test" />
+  </div>
+  <div class="row">
+    <label>TURN password</label>
+    <input id="turnPass" value="123456" type="password" />
+  </div>
+
+  <div class="row">
+    <button id="playBtn">Play</button>
+    <button id="stopBtn">Stop</button>
+  </div>
+
+  <video id="video" autoplay playsinline controls></video>
+  <div class="row">
+    <div class="log" id="log"></div>
+  </div>
+
+<script>
+(async () => {
+  const logEl = document.getElementById('log');
+  function log(msg) { logEl.textContent += msg + "\n"; }
+
+  const video = document.getElementById('video');
+  let pc = null;
+  let whepResource = null; // (nếu muốn trickle ICE có thể dùng PATCH, ở đây ta dùng non-trickle)
+
+  async function waitIceGatheringComplete(pc) {
+    if (pc.iceGatheringState === 'complete') return;
+    await new Promise(resolve => {
+      function check() {
+        if (pc.iceGatheringState === 'complete') {
+          pc.removeEventListener('icegatheringstatechange', check);
+          resolve();
+        }
+      }
+      pc.addEventListener('icegatheringstatechange', check);
+    });
+  }
+
+  async function start() {
+    const host = document.getElementById('host').value.trim();      // e.g. "example.com:8889"
+    const path = document.getElementById('path').value.trim();      // e.g. "mystream"
+    const turn = document.getElementById('turn').value.trim();      // e.g. "1.2.3.4:3478"
+    const turnUser = document.getElementById('turnUser').value.trim();
+    const turnPass = document.getElementById('turnPass').value.trim();
+
+    const whepUrl = `http://${host}/${encodeURIComponent(path)}/whep`;
+
+    log(`WHEP URL: ${whepUrl}`);
+
+    pc = new RTCPeerConnection({
+      iceServers: [
+        { urls: [`stun:${turn}`] },
+        { urls: [`turn:${turn}`], username: turnUser, credential: turnPass }
+      ]
+    });
+
+    pc.addTransceiver('video', { direction: 'recvonly' });
+    // nếu bạn có audio:
+    // pc.addTransceiver('audio', { direction: 'recvonly' });
+
+    pc.ontrack = (ev) => {
+      log('ontrack: stream received');
+      video.srcObject = ev.streams[0];
+    };
+    pc.oniceconnectionstatechange = () => log(`iceConnectionState=${pc.iceConnectionState}`);
+    pc.onconnectionstatechange = () => log(`connectionState=${pc.connectionState}`);
+
+    const offer = await pc.createOffer();
+    await pc.setLocalDescription(offer);
+
+    await waitIceGatheringComplete(pc);
+
+    // Non-trickle: gửi SDP offer sau khi gom đủ ICE
+    const res = await fetch(whepUrl, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/sdp' },
+      body: pc.localDescription.sdp
+    });
+
+    if (!res.ok) {
+      log(`WHEP POST failed: ${res.status} ${res.statusText}`);
+      return;
+    }
+
+    const answerSdp = await res.text();
+    await pc.setRemoteDescription({ type: 'answer', sdp: answerSdp });
+    log('Remote description set (answer). Playing...');
+  }
+
+  async function stop() {
+    if (pc) {
+      pc.getSenders().forEach(s => { try { s.track && s.track.stop(); } catch {} });
+      pc.getReceivers().forEach(r => { try { r.track && r.track.stop(); } catch {} });
+      pc.close();
+      pc = null;
+      video.srcObject = null;
+      log('Stopped.');
+    }
+  }
+
+  document.getElementById('playBtn').onclick = () => start().catch(e => log(String(e)));
+  document.getElementById('stopBtn').onclick = () => stop();
+})();
+</script>
+</body>
+</html>
