@@ -154,12 +154,11 @@ async def run_publisher(host: str, port: int, COM_PORT: str, baudrate: int, time
         if player.video:
             print("hehehehe")
             pc.addTrack(player.video)
+            transceiver = pc.getTransceivers()[0]
+            transceiver.setCodecPreferences(h264_codecs)
         else:
             print("No video track from RTSP!")
             return
-        
-        transceiver = pc.getTransceivers()[0]
-        transceiver.setCodecPreferences(h264_codecs)
 
         # tạo data channel chat
         channel = pc.createDataChannel("chat")

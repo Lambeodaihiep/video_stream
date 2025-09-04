@@ -56,6 +56,7 @@ async def send_rtp_packet_udp(track, udp_sock: socket.socket, GCS_IP: str):
             udp_sock.sendto(rtp_packet._data, (GCS_IP, VIDEO_PORT))
         except Exception as e:
             print("UDP send error: ", e)
+        del rtp_packet
 
 # ====== Gửi dữ liệu mỗi vài giây ======
 async def send_periodic(channel):
@@ -130,8 +131,8 @@ async def run_viewer(host: str, port: int, GCS_IP: str, timeout: int):
         @pc.on("track")
         def on_track(track):
             print("[Viewer] Track received, track kind: ", track.kind)
-            asyncio.ensure_future(opencv_display(track))          
-            # asyncio.ensure_future(send_rtp_packet_udp(track, udp_sock, GCS_IP))
+            # asyncio.ensure_future(opencv_display(track))          
+            asyncio.ensure_future(send_rtp_packet_udp(track, udp_sock, GCS_IP))
 
             ##### stream thẳng qua udp
             # nonlocal recorder
@@ -173,6 +174,7 @@ async def run_viewer(host: str, port: int, GCS_IP: str, timeout: int):
                 udp_sock.close()
                 writer.close()
                 await writer.wait_closed()
+                await pc.close()
                 return "retry"
         
         offer = RTCSessionDescription(sdp=msg["sdp"], type=msg["type"])
