@@ -55,7 +55,7 @@ async def signaling_loop(pc: RTCPeerConnection,
         except Exception as e:
             print("Signaling connection error:", e)
 
-        # đợi 3s rồi thử reconnect lại WS
+        # đợi giây rồi thử reconnect lại WS
         await asyncio.sleep(timeout)
 
 ##### CÁC HÀM DÀNH CHO PUBLISHER #####
@@ -81,7 +81,8 @@ async def uart_reader(channel, COM_port, baudrate):
 async def send_periodic(channel):
     while True:
         if channel.readyState == "open":
-            msg = b"\x01\x08\xA5\x5B\x68"
+            # msg = b"\x01\x08\xA5\x5B\x68"
+            msg = "ping"
             channel.send(msg)
         await asyncio.sleep(2)  # gửi mỗi vài giây
 
@@ -107,4 +108,3 @@ async def send_video_packet_udp(track, udp_sock: socket.socket, GCS_IP: str, VID
         except Exception as e:
             print("UDP send error: ", e)
 
-            

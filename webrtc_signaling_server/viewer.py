@@ -52,13 +52,30 @@ async def run(GCS_IP: str, timeout: int):
         def on_datachannel(channel):
             print("Data channel received:", channel.label)
 
+            if channel.label == "heartbeat":
+                @channel.on("message")
+                def on_message(msg):
+                    if msg == "ping":
+                        try:
+                            channel.send("pong")
+                        except Exception:
+                            print("[Viewer] Failed to send pong")
+                            lost_event.set()
+
+                @channel.on("close")
+                def on_close():
+                    print("[Viewer] Heartbeat channel closed")
+                    lost_event.set()
+                return
+
+            # phần chat/datachannel khác giữ nguyên
             @channel.on("message")
             def on_message(message):
-                print(f"Got from publisher: {message}")
+                print(f"Got from {channel.label} channel: {message}")
                 try:
-                    channel.send(f"Hello from subsciber")
+                    channel.send(f"Hello from subscriber")
                 except Exception as e:
-                    print("Data channel send error: ", e)
+                    print(f"{channel.label} channel send error: ", e)
 
                 #print("[Viewer] Received:", msg)
                 # try:
@@ -72,7 +89,7 @@ async def run(GCS_IP: str, timeout: int):
                 
             @channel.on("close")
             def on_close():
-                print("Data channel closed")
+                print(f"{channel.label} channel closed")
                 lost_event.set()
 
         # nhận được track video thì hiển thị hoặc là gửi cho thiết bị khác qua udp
@@ -116,7 +133,7 @@ async def main():
         "--GCS_IP", default="127.0.0.1", help="GCS IP address to send data"
     )
     parser.add_argument(
-        "--timeout", type=int, default=3, help="Signaling server connecting timeout (default: 3s)"
+        "--timeout", type=int, default=1, help="Signaling server connecting timeout (default: 1s)"
     )
     args = parser.parse_args()
 

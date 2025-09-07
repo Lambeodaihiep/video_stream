@@ -24,29 +24,29 @@ async def run(COM_PORT: str, baudrate: int, timeout: int):
     player = None
     try:
         # kiểm tra RTSP camera bằng opencv trước
-        cap = cv2.VideoCapture(rtsp_url)
-        if not cap.isOpened():
-            print("RTSP camera not available. Try again ...")
-            return "no_camera"
-        cap.release()
+        # cap = cv2.VideoCapture(rtsp_url)
+        # if not cap.isOpened():
+        #     print("RTSP camera not available. Try again ...")
+        #     return "no_camera"
+        # cap.release()
 
         # Tùy chọn FFmpeg để ổn định & giảm trễ
         # - rtsp_transport: "tcp" (ổn định) hoặc "udp" (độ trễ thấp hơn nếu mạng tốt)
         # - stimeout: timeout socket (microseconds)
         # - fflags=nobuffer/flags=low_delay: giảm đệm
-        player = MediaPlayer(
-            rtsp_url,
-            format="rtsp",
-            options={
-                "rtsp_transport": "udp",
-                "stimeout": "5000000",
-                "fflags": "nobuffer",
-                "flags": "low_delay",
-                "max_delay": "0",
-                "framedrop": "1",
-            },
-            decode=False
-        )
+        # player = MediaPlayer(
+        #     rtsp_url,
+        #     format="rtsp",
+        #     options={
+        #         "rtsp_transport": "udp",
+        #         "stimeout": "5000000",
+        #         "fflags": "nobuffer",
+        #         "flags": "low_delay",
+        #         "max_delay": "0",
+        #         "framedrop": "1",
+        #     },
+        #     decode=False
+        # )
 
         # Tạo peer connection
         pc = RTCPeerConnection(RTCConfiguration(iceServers=ice_servers))
@@ -80,31 +80,67 @@ async def run(COM_PORT: str, baudrate: int, timeout: int):
                     print("Failed to send ICE candidate:", e)
 
         # thêm track để gửi đi
-        if player.video:
-            print("hehehehe")
-            pc.addTrack(player.video)
-            # Ép server codec h264
-        else:
-            print("No video track from RTSP!")
-            return "no_camera"
-        transceiver = pc.getTransceivers()[0]
-        transceiver.setCodecPreferences(h264_codecs)
+        # if player.video:
+        #     print("hehehehe")
+        #     pc.addTrack(player.video)
+        #     # Ép server codec h264
+        # else:
+        #     print("No video track from RTSP!")
+        #     return "no_camera"
+        # transceiver = pc.getTransceivers()[0]
+        # transceiver.setCodecPreferences(h264_codecs)
 
         # Tạo kênh gửi dữ liệu
-        channel = pc.createDataChannel("chat")
-        @channel.on("open")
-        def on_open():
-            print("Channel opened")
-            asyncio.ensure_future(send_periodic(channel))
-            # asyncio.ensure_future(uart_reader(channel, COM_port, baudrate))
+        telemetry_channel = pc.createDataChannel("telemetry")
+        heartbeat_channel = pc.createDataChannel("heartbeat")
 
-        @channel.on("message")
+        # TELEMETRY CHANNEL
+        @telemetry_channel.on("open")
+        def on_open():
+            print("Telemetry channel opened")
+            # asyncio.ensure_future(uart_reader(telemetry_channel, COM_port, baudrate))
+
+        @telemetry_channel.on("message")
         def on_message(message):
             print(f"Got from subscriber: {message}")
             
-        @channel.on("close")
+        @telemetry_channel.on("close")
         def on_close():
-            print("[Publisher] datachannel closed")
+            print("[Publisher] telemetry_channel closed")
+            lost_event.set()
+
+        # HEARTBEAT CHANNEL
+        async def heartbeat_task():
+            last_pong = asyncio.get_event_loop().time()
+
+            @heartbeat_channel.on("open")
+            def on_open():
+                print("Heartbeat channel opened")
+
+            @heartbeat_channel.on("message")
+            def on_message(msg):
+                nonlocal last_pong
+                if msg == "pong":
+                    last_pong = asyncio.get_event_loop().time()
+
+            while True:
+                try:
+                    heartbeat_channel.send("ping")
+                except Exception:
+                    print("[Publisher] Heartbeat send failed")
+                    lost_event.set()
+                    break
+                await asyncio.sleep(3)
+                if asyncio.get_event_loop().time() - last_pong > 3:
+                    print("[Publisher] No pong in 5s -> connection lost")
+                    lost_event.set()
+                    break
+
+        asyncio.ensure_future(heartbeat_task())
+            
+        @heartbeat_channel.on("close")
+        def on_close():
+            print("[Publisher] heartbeat channel closed")
             lost_event.set()
             
         # chạy signaling loop song song

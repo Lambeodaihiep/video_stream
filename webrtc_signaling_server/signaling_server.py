@@ -73,7 +73,13 @@ async def handler(ws):
             print(f"Viewer disconnected, total viewers: {len(viewers)}")
 
 async def main():
-    async with websockets.serve(handler, "0.0.0.0", 8889):
+    async with websockets.serve(
+        handler,
+        "0.0.0.0",
+        8889,
+        ping_interval=1.5,
+        ping_timeout=1.5
+    ):
         print("Signaling server running on ws://0.0.0.0:8889")
         await asyncio.Future()  # run forever
 
