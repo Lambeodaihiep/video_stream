@@ -17,7 +17,15 @@ async def handler(ws):
         role = hello.get("role")
 
         if role == "publisher":
+            # luôn reset nếu có publisher cũ
+            if publisher is not None:
+                try:
+                    await publisher.close()
+                except:
+                    pass
             publisher = ws
+            pending_offer = None
+            pending_candidates = []
             print("Publisher connected")
             # nhận message từ publisher
             async for msg in ws:
@@ -35,16 +43,22 @@ async def handler(ws):
                 elif data["type"] == "answer":
                     # publisher thường không gửi answer
                     pass
+                    
+            # xóa luôn pending offer và candidates 
+            pending_offer = None
+            pending_candidates = []
+            #print("pending delete 1")
 
         elif role == "viewer":
             viewers.add(ws)
             print(f"Viewer connected, total viewers: {len(viewers)}")
             # nếu đã có pub + offer thì gửi ngay
-            if pending_offer:
+            if pending_offer is not None:
                 await ws.send(json.dumps(pending_offer))
                 # gửi luôn ice candidate cũ
                 for c in pending_candidates:
                     await ws.send(json.dumps(c))
+                
             # nhận message từ viewer
             async for msg in ws:
                 data = json.loads(msg)
@@ -54,6 +68,11 @@ async def handler(ws):
                 elif data["type"] == "candidate":
                     if publisher:
                         await publisher.send(json.dumps(data))
+                        
+            # xóa luôn pending offer và candidates 
+            pending_offer = None
+            pending_candidates = []
+            #print("pending delete 2")
 
         else:
             print("Unknown role, closing")

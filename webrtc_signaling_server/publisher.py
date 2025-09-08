@@ -7,7 +7,7 @@ import fractions
 from datetime import datetime
 from aiortc.sdp import candidate_from_sdp, candidate_to_sdp
 from aiortc.codecs import get_capabilities
-from utils import signaling_loop, uart_reader, send_periodic
+from utils import signaling_loop, uart_reader, heartbeat_task, send_periodic
 from config import *
 
 # cái này để ép server dùng codec h264
@@ -55,16 +55,16 @@ async def run(COM_PORT: str, baudrate: int, timeout: int):
         # kiểm tra tình trạng kết nối
         @pc.on("connectionstatechange")
         async def on_state_change():
-            print("[Viewer] state:", pc.connectionState)
+            print("[Publisher] state:", pc.connectionState)
             if pc.connectionState in ("failed", "disconnected", "closed"):
-                print("[Viewer] connection lost -> set lost_event")
+                print("[Publisher] connection lost -> set lost_event")
                 lost_event.set()
                 
         @pc.on("iceconnectionstatechange")
         async def on_ice_state():
-            print("[Viewer] ice:", pc.iceConnectionState)
+            print("[Publisher] ice:", pc.iceConnectionState)
             if pc.iceConnectionState in ("failed", "disconnected", "closed"):
-                print("[Viewer] ice connection lost -> set lost_event")
+                print("[Publisher] ice connection lost -> set lost_event")
                 lost_event.set()
                 
         @pc.on("icecandidate")
@@ -92,12 +92,13 @@ async def run(COM_PORT: str, baudrate: int, timeout: int):
 
         # Tạo kênh gửi dữ liệu
         telemetry_channel = pc.createDataChannel("telemetry")
-        heartbeat_channel = pc.createDataChannel("heartbeat")
+        heartbeat_channel = pc.createDataChannel("heartbeat_publisher")
 
         # TELEMETRY CHANNEL
         @telemetry_channel.on("open")
         def on_open():
             print("Telemetry channel opened")
+            asyncio.ensure_future(send_periodic(telemetry_channel))
             # asyncio.ensure_future(uart_reader(telemetry_channel, COM_port, baudrate))
 
         @telemetry_channel.on("message")
@@ -106,42 +107,38 @@ async def run(COM_PORT: str, baudrate: int, timeout: int):
             
         @telemetry_channel.on("close")
         def on_close():
-            print("[Publisher] telemetry_channel closed")
+            print("[Publisher] telemetry channel closed")
             lost_event.set()
 
         # HEARTBEAT CHANNEL
-        async def heartbeat_task():
-            last_pong = asyncio.get_event_loop().time()
-
-            @heartbeat_channel.on("open")
-            def on_open():
-                print("Heartbeat channel opened")
-
-            @heartbeat_channel.on("message")
-            def on_message(msg):
-                nonlocal last_pong
-                if msg == "pong":
-                    last_pong = asyncio.get_event_loop().time()
-
-            while True:
-                try:
-                    heartbeat_channel.send("ping")
-                except Exception:
-                    print("[Publisher] Heartbeat send failed")
-                    lost_event.set()
-                    break
-                await asyncio.sleep(3)
-                if asyncio.get_event_loop().time() - last_pong > 3:
-                    print("[Publisher] No pong in 5s -> connection lost")
-                    lost_event.set()
-                    break
-
-        asyncio.ensure_future(heartbeat_task())
+        @heartbeat_channel.on("open")
+        def on_open():
+            print("Heartbeat channel opened")
+            asyncio.ensure_future(heartbeat_task(heartbeat_channel, lost_event))
             
         @heartbeat_channel.on("close")
         def on_close():
-            print("[Publisher] heartbeat channel closed")
+            print("[Publisher] Heartbeat channel closed")
             lost_event.set()
+            
+        @pc.on("datachannel")
+        def on_datachannel(channel):
+            print("Data channel received:", channel.label)
+
+            @channel.on("message")
+            def on_message(message):
+                if channel.label == "heartbeat_viewer":
+                    if message == "ping":
+                        # print(f"Got ping from {channel.label} channel, sending pong")
+                        try:
+                            channel.send(f"pong")
+                        except Exception as e:
+                            print(f"{channel.label} channel send error: ", e)
+                
+            @channel.on("close")
+            def on_close():
+                print(f"{channel.label} channel closed")
+                lost_event.set()
             
         # chạy signaling loop song song
         signaling_task = asyncio.create_task(signaling_loop(pc, lost_event, on_icecandidate, role, timeout, SIGNALING_SERVER))

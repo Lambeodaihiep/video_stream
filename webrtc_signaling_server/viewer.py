@@ -2,7 +2,7 @@ import argparse, socket, asyncio, websockets, json, cv2
 from aiortc import RTCPeerConnection, RTCSessionDescription
 from aiortc import RTCConfiguration, RTCIceServer
 from aiortc.sdp import candidate_from_sdp, candidate_to_sdp
-from utils import signaling_loop, opencv_display, send_video_packet_udp
+from utils import signaling_loop, opencv_display, send_video_packet_udp, heartbeat_task
 from config import *
 
 # ====== GCS PORT ======
@@ -45,6 +45,20 @@ async def run(GCS_IP: str, timeout: int):
                 except Exception as e:
                     print("Failed to send ICE candidate: ", e)
             
+        # Tạo kênh gửi dữ liệu
+        heartbeat_channel = pc.createDataChannel("heartbeat_viewer")   
+        
+        # HEARTBEAT CHANNEL
+        @heartbeat_channel.on("open")
+        def on_open():
+            print("Heartbeat channel opened")
+            asyncio.ensure_future(heartbeat_task(heartbeat_channel, lost_event))
+            
+        @heartbeat_channel.on("close")
+        def on_close():
+            print("[Viewer] Heartbeat channel closed")
+            lost_event.set() 
+            
         # ====== mở udp để gửi dữ liệu ======
         udp_sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
 
@@ -52,40 +66,25 @@ async def run(GCS_IP: str, timeout: int):
         def on_datachannel(channel):
             print("Data channel received:", channel.label)
 
-            if channel.label == "heartbeat":
-                @channel.on("message")
-                def on_message(msg):
-                    if msg == "ping":
-                        try:
-                            channel.send("pong")
-                        except Exception:
-                            print("[Viewer] Failed to send pong")
-                            lost_event.set()
-
-                @channel.on("close")
-                def on_close():
-                    print("[Viewer] Heartbeat channel closed")
-                    lost_event.set()
-                return
-
-            # phần chat/datachannel khác giữ nguyên
             @channel.on("message")
             def on_message(message):
-                print(f"Got from {channel.label} channel: {message}")
-                try:
-                    channel.send(f"Hello from subscriber")
-                except Exception as e:
-                    print(f"{channel.label} channel send error: ", e)
-
-                #print("[Viewer] Received:", msg)
-                # try:
-                #     if not isinstance(msg, bytes):
-                #         data = msg.tobytes()
-                #         udp_sock.sendto(data, (GCS_IP, TELEMETRY_PORT))
-                #     else:
-                #         udp_sock.sendto(msg, (GCS_IP, TELEMETRY_PORT))
-                # except Exception as e:
-                #     print("UDP send error: ", e)
+                if channel.label == "heartbeat_publisher":
+                    if message == "ping":
+                        # print(f"Got ping from {channel.label} channel, sending pong")
+                        try:
+                            channel.send(f"pong")
+                        except Exception as e:
+                            print(f"{channel.label} channel send error: ", e)
+                elif channel.label == "telemetry":
+                    print(f"Got data from {channel.label} channel, forwarding udp")
+                    # try:
+                        # if not isinstance(message, bytes):
+                            # data = message.tobytes()
+                            # udp_sock.sendto(data, (GCS_IP, TELEMETRY_PORT))
+                        # else:
+                            # udp_sock.sendto(message, (GCS_IP, TELEMETRY_PORT))
+                    # except Exception as e:
+                        # print("UDP send error: ", e)
                 
             @channel.on("close")
             def on_close():

@@ -48,15 +48,41 @@ async def signaling_loop(pc: RTCPeerConnection,
                         candidate = candidate_from_sdp(data["candidate"].split("\n")[0])
                         await pc.addIceCandidate(candidate)
 
-                    if lost_event.is_set():
-                        print("Peer lost -> exit signaling loop")
-                        return
+            if lost_event.is_set():
+                print("Peer lost -> exit signaling loop")
+                return 
 
         except Exception as e:
             print("Signaling connection error:", e)
 
         # đợi giây rồi thử reconnect lại WS
         await asyncio.sleep(timeout)
+        
+        
+# ====== Gửi ping - chờ pong ======
+async def heartbeat_task(channel, lost_event):
+    last_pong = asyncio.get_event_loop().time()
+    
+    @channel.on("message")
+    def on_message(message):
+        nonlocal last_pong
+        if message == "pong":
+            # print("Got pong")
+            last_pong = asyncio.get_event_loop().time()
+            
+    while True:
+        if channel.readyState == "open":
+            try:
+                channel.send("ping")
+            except Exception:
+                print("Heartbeat send failed")
+                lost_event.set()
+                break
+        await asyncio.sleep(3)
+        if asyncio.get_event_loop().time() - last_pong > 3:
+            print("No pong in 3s -> connection lost")
+            lost_event.set()
+            break
 
 ##### CÁC HÀM DÀNH CHO PUBLISHER #####
 
@@ -81,8 +107,7 @@ async def uart_reader(channel, COM_port, baudrate):
 async def send_periodic(channel):
     while True:
         if channel.readyState == "open":
-            # msg = b"\x01\x08\xA5\x5B\x68"
-            msg = "ping"
+            msg = b"\x01\x08\xA5\x5B\x68"
             channel.send(msg)
         await asyncio.sleep(2)  # gửi mỗi vài giây
 
@@ -107,4 +132,5 @@ async def send_video_packet_udp(track, udp_sock: socket.socket, GCS_IP: str, VID
             udp_sock.sendto(rtp_packet._data, (GCS_IP, VIDEO_PORT))
         except Exception as e:
             print("UDP send error: ", e)
+            
 
