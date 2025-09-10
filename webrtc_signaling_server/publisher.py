@@ -19,7 +19,7 @@ role = "publisher"
 rtsp_url = "rtsp://192.168.0.101:8080/h264.sdp"
 # rtsp_url = "rtsp://admin:123456!Vht@192.168.1.120:18554/h264"
 
-async def run(COM_PORT: str, baudrate: int, timeout: int):
+async def run(COM_port: str, baudrate: int, timeout: int):
     pc = None
     player = None
     try:
@@ -92,7 +92,6 @@ async def run(COM_PORT: str, baudrate: int, timeout: int):
 
         # Tạo kênh gửi dữ liệu
         telemetry_channel = pc.createDataChannel("telemetry")
-        heartbeat_channel = pc.createDataChannel("heartbeat_publisher")
 
         # TELEMETRY CHANNEL
         @telemetry_channel.on("open")
@@ -109,17 +108,6 @@ async def run(COM_PORT: str, baudrate: int, timeout: int):
         def on_close():
             print("[Publisher] telemetry channel closed")
             lost_event.set()
-
-        # HEARTBEAT CHANNEL
-        @heartbeat_channel.on("open")
-        def on_open():
-            print("Heartbeat channel opened")
-            asyncio.ensure_future(heartbeat_task(heartbeat_channel, lost_event))
-            
-        @heartbeat_channel.on("close")
-        def on_close():
-            print("[Publisher] Heartbeat channel closed")
-            lost_event.set()
             
         @pc.on("datachannel")
         def on_datachannel(channel):
@@ -127,13 +115,8 @@ async def run(COM_PORT: str, baudrate: int, timeout: int):
 
             @channel.on("message")
             def on_message(message):
-                if channel.label == "heartbeat_viewer":
-                    if message == "ping":
-                        # print(f"Got ping from {channel.label} channel, sending pong")
-                        try:
-                            channel.send(f"pong")
-                        except Exception as e:
-                            print(f"{channel.label} channel send error: ", e)
+                if channel.label == "gcs_command":
+                    print(f"{channel.label} channel got: {message}")
                 
             @channel.on("close")
             def on_close():
@@ -145,11 +128,9 @@ async def run(COM_PORT: str, baudrate: int, timeout: int):
 
         # chờ cho tới khi PC mất
         await lost_event.wait()
-        print("Peer connection lost -> rebuild peer")
-        
-        # đóng peer cũ
-        await pc.close()
         signaling_task.cancel()
+        print("Peer connection lost -> rebuild peer")
+        await pc.close()        # đóng peer cũ
         return "retry"
     
     except Exception as e:
@@ -169,7 +150,7 @@ async def main():
         description="WebRTC video / data-channels implementation"
     )
     parser.add_argument(
-        "--COM_port", default="/dev/ttyUSB0"
+        "--COM_port", default="/dev/ttyACM0"
     )
     parser.add_argument(
         "--baudrate", type=int, default=115200

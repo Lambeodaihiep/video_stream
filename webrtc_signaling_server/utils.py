@@ -5,7 +5,7 @@ from aiortc import RTCPeerConnection, RTCSessionDescription
 
 ###### CÁC HÀM DÙNG CHUNG #####
 
-# ====== Task giữ kết nối signaling và peer connection độc lập ======
+# ====== Task giữ kết nối signaling server ======
 async def signaling_loop(pc: RTCPeerConnection,
                          lost_event: asyncio.Event,
                          on_icecandidate,
@@ -16,9 +16,10 @@ async def signaling_loop(pc: RTCPeerConnection,
     """
     Loop để duy trì kết nối với signaling server.
     Nếu WS rớt thì tự động reconnect.
-    Không đóng PC, trừ khi lost_event set() (peer thực sự mất).
+    Không đóng peer connection, trừ khi lost_event set()
     """
-    while not lost_event.is_set():
+    #while not lost_event.is_set():
+    while True:
         try:
             async with websockets.connect(signaling_server) as ws:
                 print("Connected to signaling server")
@@ -47,15 +48,19 @@ async def signaling_loop(pc: RTCPeerConnection,
                     elif data["type"] == "candidate":
                         candidate = candidate_from_sdp(data["candidate"].split("\n")[0])
                         await pc.addIceCandidate(candidate)
-
-            if lost_event.is_set():
-                print("Peer lost -> exit signaling loop")
-                return 
+                    elif data["type"] == "request_offer" and role == "publisher":
+                        print("Server requested new offer")
+                        offer = await pc.createOffer()
+                        await pc.setLocalDescription(offer)
+                        await ws.send(json.dumps({
+                            "type": "offer",
+                            "sdp": pc.localDescription.sdp
+                        }))
 
         except Exception as e:
             print("Signaling connection error:", e)
 
-        # đợi giây rồi thử reconnect lại WS
+        # đợi vài giây rồi thử reconnect lại signaling server
         await asyncio.sleep(timeout)
         
         
@@ -78,30 +83,41 @@ async def heartbeat_task(channel, lost_event):
                 print("Heartbeat send failed")
                 lost_event.set()
                 break
-        await asyncio.sleep(3)
-        if asyncio.get_event_loop().time() - last_pong > 3:
-            print("No pong in 3s -> connection lost")
+        await asyncio.sleep(5)
+        if asyncio.get_event_loop().time() - last_pong > 5:
+            print("No pong in 5s -> connection lost")
             lost_event.set()
             break
 
 ##### CÁC HÀM DÀNH CHO PUBLISHER #####
 
-# ====== đọc từ uart rồi gửi đi ====== (not use)
-async def uart_reader(channel, COM_port, baudrate):
+# ====== đọc từ uart rồi gửi đi ======
+async def uart_reader(channel, COM_port: str, baudrate: int):
     ser = serial.Serial(COM_port, baudrate=baudrate, timeout=1)
+    ser.reset_input_buffer() 
+    ser.reset_output_buffer() 
     print(f"[Publisher] UART opened at {COM_port} {baudrate}")
     loop = asyncio.get_event_loop()
-    while True:
-        line = await loop.run_in_executor(None, ser.readline)
-        if line:
-            msg = line.decode(errors="ignore").strip()
-            #data = {"from": "publisher", "to": "viewer-1", "msg": msg}
-            if channel.readyState == "open":
-                #channel.send(json.dumps(data))
-                channel.send(msg)
-                print("[Publisher] Sent UART ->", msg)
+    data = b''
+    try:
+        while True:
+            if ser.in_waiting > 0:
+                byte = await loop.run_in_executor(None, ser.read)
+                data = data + byte
             else:
-                print("[Publisher] No channel to send")
+                if channel.readyState == "open":
+                    if len(data) != 0:
+                        channel.send(data)
+                        print("[Publisher] Sent UART -> webrtc", data)
+                else:
+                    print("[Publisher] No channel to send")
+                    ser.close()
+                    break
+                data = b''
+    except asyncio.CancelledError:
+        print("[Publisher] UART reader cancelled")
+    finally:
+        ser.close()
 
 # ====== Gửi dữ liệu linh tinh mỗi vài giây ======
 async def send_periodic(channel):
@@ -132,5 +148,26 @@ async def send_video_packet_udp(track, udp_sock: socket.socket, GCS_IP: str, VID
             udp_sock.sendto(rtp_packet._data, (GCS_IP, VIDEO_PORT))
         except Exception as e:
             print("UDP send error: ", e)
+            
+# ====== nhận lệnh điều khiển từ udp rồi gửi đi ======
+async def send_command_from_gcs(channel, udp_sock: socket.socket):
+    udp_sock.setblocking(False)
+    loop = asyncio.get_event_loop()
+
+    while True:
+        try:
+            packet, _ = await asyncio.wait_for(
+                loop.sock_recvfrom(udp_sock, 65535),
+                timeout=1.0
+            )
+            if channel.readyState == "open":
+                channel.send(packet)
+                print("[Viewer] Sent command ->", packet)
+            else:
+                print("[Viewer] No channel to send")
+        except asyncio.TimeoutError:
+            continue
+        except Exception as e:
+            pass
             
 
