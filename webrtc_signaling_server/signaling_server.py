@@ -33,11 +33,13 @@ async def handler(ws):
                 if data["type"] == "offer":
                     pending_offer = data
                     # gửi cho tất cả viewer đang online
+                    print("sent pub offer")
                     for v in viewers:
                         await v.send(json.dumps(data))
                 elif data["type"] == "candidate":
                     # lưu ice candidate, chuyển tiếp cho viewers
                     pending_candidates.append(data)
+                    print("sent pub candidate")
                     for v in viewers:
                         await v.send(json.dumps(data))
                 elif data["type"] == "answer":
@@ -54,10 +56,21 @@ async def handler(ws):
             print(f"Viewer connected, total viewers: {len(viewers)}")
             # nếu đã có pub + offer thì gửi ngay
             if pending_offer is not None:
+                print("sent pub offer and candidate")
                 await ws.send(json.dumps(pending_offer))
                 # gửi luôn ice candidate cũ
                 for c in pending_candidates:
                     await ws.send(json.dumps(c))
+            elif pending_offer is None:
+                # thông báo publisher cần gửi lại offer
+                if publisher is not None:
+                    print("requesting offer from publisher")
+                    await publisher.send(json.dumps({"type": "request_offer"}))
+
+                # xóa luôn pending offer và candidates 
+            pending_offer = None
+            pending_candidates = []
+            #print("pending delete 2")
                 
             # nhận message từ viewer
             async for msg in ws:
@@ -69,11 +82,6 @@ async def handler(ws):
                     if publisher:
                         await publisher.send(json.dumps(data))
                         
-            # xóa luôn pending offer và candidates 
-            pending_offer = None
-            pending_candidates = []
-            #print("pending delete 2")
-
         else:
             print("Unknown role, closing")
             return
@@ -82,14 +90,18 @@ async def handler(ws):
         pass
 
     finally:
+        pending_offer = None
+        pending_candidates = []
         if ws == publisher:
-            print("Publisher disconneted")
             publisher = None
-            pending_offer = None
-            pending_candidates = []
+            print("Publisher disconneted")
         else:
             viewers.discard(ws)
             print(f"Viewer disconnected, total viewers: {len(viewers)}")
+            # if len(viewers) == 0:
+            #     if publisher is not None:
+            #         print("requesting offer from publisher")
+            #         await publisher.send(json.dumps({"type": "request_offer"}))
 
 async def main():
     async with websockets.serve(

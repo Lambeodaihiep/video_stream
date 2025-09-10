@@ -2,7 +2,7 @@ import argparse, socket, asyncio, websockets, json, cv2
 from aiortc import RTCPeerConnection, RTCSessionDescription
 from aiortc import RTCConfiguration, RTCIceServer
 from aiortc.sdp import candidate_from_sdp, candidate_to_sdp
-from utils import signaling_loop, opencv_display, send_video_packet_udp, heartbeat_task
+from utils import signaling_loop, opencv_display, send_video_packet_udp, heartbeat_task, send_command_from_gcs
 from config import *
 
 # ====== GCS PORT ======
@@ -44,23 +44,23 @@ async def run(GCS_IP: str, timeout: int):
                     }))
                 except Exception as e:
                     print("Failed to send ICE candidate: ", e)
+                    
+        # ====== mở cổng udp ======
+        udp_sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
             
         # Tạo kênh gửi dữ liệu
-        heartbeat_channel = pc.createDataChannel("heartbeat_viewer")   
+        command_channel = pc.createDataChannel("gcs_command")   
         
         # HEARTBEAT CHANNEL
-        @heartbeat_channel.on("open")
+        @command_channel.on("open")
         def on_open():
             print("Heartbeat channel opened")
-            asyncio.ensure_future(heartbeat_task(heartbeat_channel, lost_event))
+            asyncio.ensure_future(send_command_from_gcs(command_channel, udp_sock))
             
-        @heartbeat_channel.on("close")
+        @command_channel.on("close")
         def on_close():
             print("[Viewer] Heartbeat channel closed")
             lost_event.set() 
-            
-        # ====== mở udp để gửi dữ liệu ======
-        udp_sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
 
         @pc.on("datachannel")
         def on_datachannel(channel):
@@ -77,14 +77,14 @@ async def run(GCS_IP: str, timeout: int):
                             print(f"{channel.label} channel send error: ", e)
                 elif channel.label == "telemetry":
                     print(f"Got data from {channel.label} channel, forwarding udp")
-                    # try:
-                        # if not isinstance(message, bytes):
-                            # data = message.tobytes()
-                            # udp_sock.sendto(data, (GCS_IP, TELEMETRY_PORT))
-                        # else:
-                            # udp_sock.sendto(message, (GCS_IP, TELEMETRY_PORT))
-                    # except Exception as e:
-                        # print("UDP send error: ", e)
+                    try:
+                        if not isinstance(message, bytes):
+                            data = message.tobytes()
+                            udp_sock.sendto(data, (GCS_IP, TELEMETRY_PORT))
+                        else:
+                            udp_sock.sendto(message, (GCS_IP, TELEMETRY_PORT))
+                    except Exception as e:
+                        print("UDP send error: ", e)
                 
             @channel.on("close")
             def on_close():
@@ -108,11 +108,9 @@ async def run(GCS_IP: str, timeout: int):
 
         # chờ cho tới khi PC mất
         await lost_event.wait()
-        print("Peer connection lost -> rebuild peer")
-        
-        # đóng peer cũ
-        await pc.close()
         signaling_task.cancel()
+        print("Peer connection lost -> rebuild peer")
+        await pc.close()        # đóng peer cũ
         return "retry"
 
     except Exception as e:
@@ -132,7 +130,7 @@ async def main():
         "--GCS_IP", default="127.0.0.1", help="GCS IP address to send data"
     )
     parser.add_argument(
-        "--timeout", type=int, default=1, help="Signaling server connecting timeout (default: 1s)"
+        "--timeout", type=int, default=3, help="Signaling server connecting timeout (default: 3s)"
     )
     args = parser.parse_args()
 
