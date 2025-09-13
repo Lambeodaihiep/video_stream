@@ -72,7 +72,7 @@ async def heartbeat_task(channel, lost_event):
     def on_message(message):
         nonlocal last_pong
         if message == "pong":
-            # print("Got pong")
+            print("Got pong")
             last_pong = asyncio.get_event_loop().time()
             
     while True:
@@ -82,12 +82,12 @@ async def heartbeat_task(channel, lost_event):
             except Exception:
                 print("Heartbeat send failed")
                 lost_event.set()
-                break
+                return
         await asyncio.sleep(5)
         if asyncio.get_event_loop().time() - last_pong > 5:
             print("No pong in 5s -> connection lost")
             lost_event.set()
-            break
+            return
 
 ##### CÁC HÀM DÀNH CHO PUBLISHER #####
 

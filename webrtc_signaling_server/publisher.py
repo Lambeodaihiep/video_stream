@@ -115,7 +115,15 @@ async def run(COM_port: str, baudrate: int, timeout: int):
 
             @channel.on("message")
             def on_message(message):
-                if channel.label == "gcs_command":
+                if channel.label == "heartbeat_viewer":
+                    if message == "ping":
+                        # print(f"Got ping from {channel.label} channel, sending pong")
+                        try:
+                            channel.send(f"pong")
+                        except Exception as e:
+                            print(f"{channel.label} channel send error: ", e)
+
+                elif channel.label == "gcs_command":
                     print(f"{channel.label} channel got: {message}")
                 
             @channel.on("close")

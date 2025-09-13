@@ -3,8 +3,8 @@ from aiortc import RTCIceServer
 ##### CONFIG CHUNG #####
 
 # ====== SIGNALING SERVER ======
-#SIGNALING_SERVER = "ws://dev.bitsec.it:8889"
-SIGNALING_SERVER = "ws://192.168.0.110:8889"
+SIGNALING_SERVER = "ws://dev.bitsec.it:8889"
+# SIGNALING_SERVER = "ws://192.168.0.110:8889"
 
 # ====== TURN SERVER ======
 TURN_HOST     = "dev.bitsec.it:3478"       # "198.51.100.22:3478"

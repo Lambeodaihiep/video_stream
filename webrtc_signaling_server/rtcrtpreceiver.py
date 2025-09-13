@@ -417,16 +417,16 @@ class RTCRtpReceiver:
                     self.__rtx_ssrc[encoding.rtx.ssrc] = encoding.ssrc
 
             # start decoder thread
-            self.__decoder_thread = threading.Thread(
-                target=decoder_worker,
-                name=self.__kind + "-decoder",
-                args=(
-                    asyncio.get_event_loop(),
-                    self.__decoder_queue,
-                    self._track._queue,
-                ),
-            )
-            self.__decoder_thread.start()
+            # self.__decoder_thread = threading.Thread(
+            #     target=decoder_worker,
+            #     name=self.__kind + "-decoder",
+            #     args=(
+            #         asyncio.get_event_loop(),
+            #         self.__decoder_queue,
+            #         self._track._queue,
+            #     ),
+            # )
+            # self.__decoder_thread.start()
 
             # new thread
             # start transfer thread

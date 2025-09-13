@@ -22,15 +22,15 @@ async def run(GCS_IP: str, timeout: int):
         async def on_state_change():
             print("[Viewer] state:", pc.connectionState)
             if pc.connectionState in ("failed", "disconnected", "closed"):
-                print("[Viewer] connection lost -> set lost_event")
-                lost_event.set()
+                print("[Viewer] connection lost")
+                # lost_event.set()
                 
         @pc.on("iceconnectionstatechange")
         async def on_ice_state():
             print("[Viewer] ice:", pc.iceConnectionState)
             if pc.iceConnectionState in ("failed", "disconnected", "closed"):
-                print("[Viewer] ice connection lost -> set lost_event")
-                lost_event.set()
+                print("[Viewer] ice connection lost")
+                # lost_event.set()
                 
         # gửi ICE của viewer, đăng ký trước khi kết nối signaling
         @pc.on("icecandidate")
@@ -49,18 +49,19 @@ async def run(GCS_IP: str, timeout: int):
         udp_sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
             
         # Tạo kênh gửi dữ liệu
-        command_channel = pc.createDataChannel("gcs_command")   
+        command_channel = pc.createDataChannel("gcs_command")
+        heartbeat_channel = pc.createDataChannel("heartbeat_viewer")
         
-        # HEARTBEAT CHANNEL
+        # COMMAND CHANNEL
         @command_channel.on("open")
         def on_open():
-            print("Heartbeat channel opened")
+            print("command channel opened")
             asyncio.ensure_future(send_command_from_gcs(command_channel, udp_sock))
             
         @command_channel.on("close")
         def on_close():
             print("[Viewer] Heartbeat channel closed")
-            lost_event.set() 
+            # lost_event.set() 
 
         @pc.on("datachannel")
         def on_datachannel(channel):
@@ -89,19 +90,30 @@ async def run(GCS_IP: str, timeout: int):
             @channel.on("close")
             def on_close():
                 print(f"{channel.label} channel closed")
-                lost_event.set()
+                # lost_event.set()
+
+        # HEARTBEAT CHANNEL
+        @heartbeat_channel.on("open")
+        def on_open():
+            print("Heartbeat channel opened")
+            asyncio.ensure_future(heartbeat_task(heartbeat_channel, lost_event))
+            
+        @heartbeat_channel.on("close")
+        def on_close():
+            print("[Viewer] Heartbeat channel closed")
+            # lost_event.set() 
 
         # nhận được track video thì hiển thị hoặc là gửi cho thiết bị khác qua udp
         @pc.on("track")
         def on_track(track):
             print("[Viewer] Track received, track kind: ", track.kind)
-            asyncio.ensure_future(opencv_display(track))
-            #asyncio.ensure_future(send_video_packet_udp(track, udp_sock, GCS_IP, VIDEO_PORT))
+            #asyncio.ensure_future(opencv_display(track))
+            asyncio.ensure_future(send_video_packet_udp(track, udp_sock, GCS_IP, VIDEO_PORT))
             
             @track.on("ended")
             def _ended():
                 print("[Viewer] track ended")
-                lost_event.set()
+                # lost_event.set()
                 
         # chạy signaling loop song song
         signaling_task = asyncio.create_task(signaling_loop(pc, lost_event, on_icecandidate, role, timeout, SIGNALING_SERVER))
@@ -111,6 +123,7 @@ async def run(GCS_IP: str, timeout: int):
         signaling_task.cancel()
         print("Peer connection lost -> rebuild peer")
         await pc.close()        # đóng peer cũ
+        print("pc closed")
         return "retry"
 
     except Exception as e:
@@ -118,8 +131,9 @@ async def run(GCS_IP: str, timeout: int):
         return "retry"
     
     finally:
-        if pc:
-            await pc.close()
+        pass
+    #     if pc:
+    #         await pc.close()
 
 # ====== main ======
 async def main():
