@@ -8,3 +8,5 @@ gst-launch-1.0 rtspsrc location=rtsp://192.168.0.100:8080/h264.sdp ! rtph264depa
 ### read from udp (lỏ)
 gst-launch-1.0 udpsrc port=5001 ! decodebin ! autovideosink
 gst-launch-1.0 -v udpsrc port=5001 ! h264parse ! avdec_h264 ! videoconvert ! video/x-raw,format=BGRA ! autovideosink sync=false
+
+gst-launch-1.0 -v   udpsrc port=5002 caps="application/x-rtp, media=video, encoding-name=H264, payload=96" !   rtpjitterbuffer latency=200 !   rtph264depay ! h264parse ! avdec_h264 !   videoconvert ! video/x-raw,format=BGRA !   autovideosink sync=false

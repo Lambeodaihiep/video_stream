@@ -22,7 +22,7 @@ for d in site_packages_dirs:
         break
 
 if not target_file:
-    print("Not found rtcrtpreceiver.py i site-packages")
+    print("Not found rtcrtpreceiver.py site-packages")
     sys.exit(1)
 
 print(f"File: {target_file}")

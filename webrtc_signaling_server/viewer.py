@@ -2,7 +2,13 @@ import argparse, socket, asyncio, websockets, json, cv2
 from aiortc import RTCPeerConnection, RTCSessionDescription
 from aiortc import RTCConfiguration, RTCIceServer
 from aiortc.sdp import candidate_from_sdp, candidate_to_sdp
-from utils import signaling_loop, opencv_display, send_video_packet_udp, heartbeat_task, send_command_from_gcs
+from utils import (signaling_loop,
+                   opencv_display,
+                   send_video_packet_udp,
+                   heartbeat_task,
+                   send_command_from_gcs,
+                   opencv_to_gstreamer,
+                   signaling_loop_pro)
 from config import *
 
 # ====== GCS PORT ======
@@ -23,14 +29,14 @@ async def run(GCS_IP: str, timeout: int):
             print("[Viewer] state:", pc.connectionState)
             if pc.connectionState in ("failed", "disconnected", "closed"):
                 print("[Viewer] connection lost")
-                # lost_event.set()
+                lost_event.set()
                 
         @pc.on("iceconnectionstatechange")
         async def on_ice_state():
             print("[Viewer] ice:", pc.iceConnectionState)
             if pc.iceConnectionState in ("failed", "disconnected", "closed"):
                 print("[Viewer] ice connection lost")
-                # lost_event.set()
+                lost_event.set()
                 
         # gửi ICE của viewer, đăng ký trước khi kết nối signaling
         @pc.on("icecandidate")
@@ -77,7 +83,7 @@ async def run(GCS_IP: str, timeout: int):
                         except Exception as e:
                             print(f"{channel.label} channel send error: ", e)
                 elif channel.label == "telemetry":
-                    print(f"Got data from {channel.label} channel, forwarding udp")
+                    # print(f"Got data from {channel.label} channel, forwarding udp")
                     try:
                         if not isinstance(message, bytes):
                             data = message.tobytes()
@@ -107,20 +113,23 @@ async def run(GCS_IP: str, timeout: int):
         @pc.on("track")
         def on_track(track):
             print("[Viewer] Track received, track kind: ", track.kind)
-            #asyncio.ensure_future(opencv_display(track))
-            asyncio.ensure_future(send_video_packet_udp(track, udp_sock, GCS_IP, VIDEO_PORT))
+            asyncio.ensure_future(opencv_display(track))
+            # asyncio.ensure_future(opencv_to_gstreamer(track))
+            # asyncio.ensure_future(send_video_packet_udp(track, udp_sock, GCS_IP, VIDEO_PORT))
             
             @track.on("ended")
             def _ended():
                 print("[Viewer] track ended")
-                # lost_event.set()
+                lost_event.set()
                 
         # chạy signaling loop song song
-        signaling_task = asyncio.create_task(signaling_loop(pc, lost_event, on_icecandidate, role, timeout, SIGNALING_SERVER))
+        # signaling_task = asyncio.create_task(signaling_loop(pc, on_icecandidate, role, timeout, SIGNALING_SERVER))
+        signaling_task = asyncio.create_task(signaling_loop_pro(pc, lost_event, on_icecandidate, role, timeout, SIGNALING_SERVER))
 
         # chờ cho tới khi PC mất
         await lost_event.wait()
         signaling_task.cancel()
+        udp_sock.close()
         print("Peer connection lost -> rebuild peer")
         await pc.close()        # đóng peer cũ
         print("pc closed")

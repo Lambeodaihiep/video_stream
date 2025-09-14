@@ -1,13 +1,10 @@
-import argparse, serial, asyncio, websockets, json, cv2
+import argparse, asyncio, json, cv2
 from aiortc import RTCPeerConnection, RTCSessionDescription
 from aiortc import RTCConfiguration, RTCIceServer
-from av import VideoFrame
 from aiortc.contrib.media import MediaPlayer
-import fractions
-from datetime import datetime
 from aiortc.sdp import candidate_from_sdp, candidate_to_sdp
 from aiortc.codecs import get_capabilities
-from utils import signaling_loop, uart_reader, heartbeat_task, send_periodic
+from utils import signaling_loop, uart_reader, heartbeat_task, send_periodic, signaling_loop_pro
 from config import *
 
 # cái này để ép server dùng codec h264
@@ -16,7 +13,9 @@ h264_codecs = [c for c in video_caps.codecs if c.mimeType.lower() == "video/h264
 role = "publisher"
 
 # ====== Camera IP ======
-rtsp_url = "rtsp://192.168.0.101:8080/h264.sdp"
+#rtsp_url = "rtsp://192.168.0.101:8080/h264.sdp"
+#rtsp_url = "rtsp://192.168.0.107:8554/test"
+rtsp_url = "rtsp://admin:123456a%40@192.168.5.69:554/Streaming/Channels/101"
 # rtsp_url = "rtsp://admin:123456!Vht@192.168.1.120:18554/h264"
 
 async def run(COM_port: str, baudrate: int, timeout: int):
@@ -24,29 +23,42 @@ async def run(COM_port: str, baudrate: int, timeout: int):
     player = None
     try:
         # kiểm tra RTSP camera bằng opencv trước
-        # cap = cv2.VideoCapture(rtsp_url)
-        # if not cap.isOpened():
-        #     print("RTSP camera not available. Try again ...")
-        #     return "no_camera"
-        # cap.release()
+        cap = cv2.VideoCapture(rtsp_url)
+        if not cap.isOpened():
+            print("RTSP camera not available. Try again ...")
+            return "no_camera"
+        cap.release()
 
         # Tùy chọn FFmpeg để ổn định & giảm trễ
         # - rtsp_transport: "tcp" (ổn định) hoặc "udp" (độ trễ thấp hơn nếu mạng tốt)
         # - stimeout: timeout socket (microseconds)
         # - fflags=nobuffer/flags=low_delay: giảm đệm
-        # player = MediaPlayer(
-        #     rtsp_url,
-        #     format="rtsp",
-        #     options={
-        #         "rtsp_transport": "udp",
-        #         "stimeout": "5000000",
-        #         "fflags": "nobuffer",
-        #         "flags": "low_delay",
-        #         "max_delay": "0",
-        #         "framedrop": "1",
-        #     },
-        #     decode=False
-        # )
+        player = MediaPlayer(
+            rtsp_url,
+            format="rtsp",
+            options={
+                "rtsp_transport": "udp",
+                "stimeout": "5000000",
+                "fflags": "nobuffer",
+                "flags": "low_delay",
+                "max_delay": "0",
+                "framedrop": "1",
+            },
+            decode=False
+        )
+        #player = MediaPlayer(
+        #    "rtp://0.0.0.0:40005",   # listen UDP 40005
+        #    format="mpegts",         # vì trong RTP chứa TS
+        #    options={
+        #        "protocol_whitelist": "file,udp,rtp",  # cho phép udp/rtp
+        #        "fflags": "nobuffer",
+        #        "flags": "low_delay",
+        #        "max_delay": "0",
+        #        "reorder_queue_size": "0",
+        #        "stimeout": "5000000",
+        #    },
+        #    decode=False
+        #)
 
         # Tạo peer connection
         pc = RTCPeerConnection(RTCConfiguration(iceServers=ice_servers))
@@ -80,25 +92,32 @@ async def run(COM_port: str, baudrate: int, timeout: int):
                     print("Failed to send ICE candidate:", e)
 
         # thêm track để gửi đi
-        # if player.video:
-        #     print("hehehehe")
-        #     pc.addTrack(player.video)
-        #     # Ép server codec h264
-        # else:
-        #     print("No video track from RTSP!")
-        #     return "no_camera"
-        # transceiver = pc.getTransceivers()[0]
-        # transceiver.setCodecPreferences(h264_codecs)
+        if player.video:
+            print("hehehehe")
+            pc.addTrack(player.video)
+            # Ép server codec h264
+        else:
+            print("No video track from RTSP!")
+            return "no_camera"
+        transceiver = pc.getTransceivers()[0]
+        transceiver.setCodecPreferences(h264_codecs)
+        
+        # mở kênh serial
+        #ser = serial.Serial(COM_port, baudrate=baudrate, timeout=1)
+        #ser.reset_input_buffer() 
+        #ser.reset_output_buffer() 
+        #print(f"[Publisher] UART opened at {COM_port} {baudrate}")
 
         # Tạo kênh gửi dữ liệu
         telemetry_channel = pc.createDataChannel("telemetry")
-
+        heartbeat_channel = pc.createDataChannel("heartbeat_publisher")
+        
         # TELEMETRY CHANNEL
         @telemetry_channel.on("open")
         def on_open():
             print("Telemetry channel opened")
             asyncio.ensure_future(send_periodic(telemetry_channel))
-            # asyncio.ensure_future(uart_reader(telemetry_channel, COM_port, baudrate))
+            #asyncio.ensure_future(uart_reader(telemetry_channel, ser))
 
         @telemetry_channel.on("message")
         def on_message(message):
@@ -117,28 +136,41 @@ async def run(COM_port: str, baudrate: int, timeout: int):
             def on_message(message):
                 if channel.label == "heartbeat_viewer":
                     if message == "ping":
-                        # print(f"Got ping from {channel.label} channel, sending pong")
                         try:
-                            channel.send(f"pong")
+                            channel.send("pong")
                         except Exception as e:
-                            print(f"{channel.label} channel send error: ", e)
+                            print(f"{channel.label} channel send error: {e}")
 
-                elif channel.label == "gcs_command":
-                    print(f"{channel.label} channel got: {message}")
+                if channel.label == "gcs_command":
+                    print(f"{channel.label} channel got: {message}, sending to uart")
+                    #ser.write(message)
+                    
                 
             @channel.on("close")
             def on_close():
                 print(f"{channel.label} channel closed")
                 lost_event.set()
+        # HEARTBEAT CHANNEL
+        @heartbeat_channel.on("open")
+        def on_open():
+            print("heartbeat channel opened")
+            asyncio.ensure_future(heartbeat_task(heartbeat_channel, lost_event))
+
+        @heartbeat_channel.on("close")
+        def on_close():
+            print("[Publisher] heartbeat channel closed")
+            lost_event.set()
             
         # chạy signaling loop song song
-        signaling_task = asyncio.create_task(signaling_loop(pc, lost_event, on_icecandidate, role, timeout, SIGNALING_SERVER))
+#        signaling_task = asyncio.create_task(signaling_loop(pc, on_icecandidate, role, timeout, SIGNALING_SERVER))
+        signaling_task = asyncio.create_task(signaling_loop_pro(pc, lost_event, on_icecandidate, role, timeout, SIGNALING_SERVER))
 
         # chờ cho tới khi PC mất
         await lost_event.wait()
         signaling_task.cancel()
         print("Peer connection lost -> rebuild peer")
         await pc.close()        # đóng peer cũ
+        print("pc closed")
         return "retry"
     
     except Exception as e:
