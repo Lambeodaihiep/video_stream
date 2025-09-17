@@ -1,14 +1,15 @@
 import argparse, serial, asyncio, websockets, json, cv2
 from aiortc import RTCPeerConnection, RTCSessionDescription
 from aiortc import RTCConfiguration, RTCIceServer
-from aiortc.contrib.media import MediaPlayer, MediaRelay
+from aiortc.contrib.media import MediaPlayer
 from aiortc.sdp import candidate_from_sdp, candidate_to_sdp
 from aiortc.codecs import get_capabilities
 from utils import (signaling_loop,
                    uart_reader,
                    heartbeat_task,
                    send_periodic,
-                   signaling_loop_pro)
+                   signaling_loop_pro,
+                   RtpForwardTrack)
 from config import *
 
 # cái này để ép server dùng codec h264
@@ -22,7 +23,9 @@ role = "publisher"
 #rtsp_url = "rtsp://admin:123456a%40@192.168.5.69:554/Streaming/Channels/101"
 # rtsp_url = "rtsp://admin:123456!Vht@192.168.1.120:18554/h264"
 
-async def run(player: {None, MediaPlayer}, uart: str, COM_port: str, baudrate: int, timeout: int):
+video_source = RtpForwardTrack()
+
+async def run(video_source, uart: str, COM_port: str, baudrate: int, timeout: int):
     pc = None
     ser = None
     try:
@@ -58,12 +61,14 @@ async def run(player: {None, MediaPlayer}, uart: str, COM_port: str, baudrate: i
                     print("Failed to send ICE candidate:", e)
 
         # thêm track để gửi đi
-        if player is not None and player.video:
-            print("hehehehe")
-            pc.addTrack(player.video)
-            # Ép server codec h264
-            transceiver = pc.getTransceivers()[0]
-            transceiver.setCodecPreferences(h264_codecs)
+        await video_source.start()
+        pc.addTrack(video_source)
+        # if player is not None and player.video:
+            # print("hehehehe")
+            # pc.addTrack(player.video)
+            # # Ép server codec h264
+        transceiver = pc.getTransceivers()[0]
+        transceiver.setCodecPreferences(h264_codecs)
         # else:
         #     print("No video track from RTSP!")
         #     return "no_camera"
@@ -142,19 +147,17 @@ async def run(player: {None, MediaPlayer}, uart: str, COM_port: str, baudrate: i
         print("Peer connection lost -> rebuild peer")
         await pc.close()        # đóng peer cũ
         print("pc closed")
-        return "retry", player
+        return "retry"
     
     except Exception as e:
         print("Error:", e)
-        return "retry", player
+        return "retry"
     
     finally:
-        print("cleaning ...")
         if pc is not None:
             await pc.close()
-        #if player is not None:
-        #    player.video.stop()
-        print("done cleaning")
+        # if player is not None:
+        #     player.video.stop()
 
 
 # ====== main ======
@@ -179,8 +182,8 @@ async def main():
     )
     args = parser.parse_args()
 
-    player = None
-    if args.camera == "on":
+    #player = None
+    #if args.camera == "on":
         # kiểm tra RTSP camera bằng opencv trước
         #cap = cv2.VideoCapture(rtsp_url)
         #if not cap.isOpened():
@@ -205,22 +208,22 @@ async def main():
             # },
             # decode=False
         # )
-        player = MediaPlayer(
-          "rtp://0.0.0.0:40005",   # listen UDP 40005
-          format="mpegts",         # vì trong RTP chứa TS
-          options={
-              "protocol_whitelist": "file,udp,rtp",  # cho phép udp/rtp
-              "fflags": "nobuffer",
-              "flags": "low_delay",
-              "max_delay": "0",
-              "reorder_queue_size": "0",
-              "stimeout": "5000000",
-          },
-          decode=False
-        )
+        # player = MediaPlayer(
+          # "rtp://0.0.0.0:40005",   # listen UDP 40005
+          # format="mpegts",         # vì trong RTP chứa TS
+          # options={
+              # "protocol_whitelist": "file,udp,rtp",  # cho phép udp/rtp
+              # "fflags": "nobuffer",
+              # "flags": "low_delay",
+              # "max_delay": "0",
+              # "reorder_queue_size": "0",
+              # "stimeout": "5000000",
+          # },
+          # decode=False
+        # )
 
     while True:
-        result, player = await run(player, args.uart, args.COM_port, args.baudrate, args.timeout)
+        result = await run(video_source, args.uart, args.COM_port, args.baudrate, args.timeout)
         if result in ["retry", "no_camera"]:
             if result == "retry":
                 print("Got retry, retrying ...")

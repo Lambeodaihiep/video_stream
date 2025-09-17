@@ -1,7 +1,9 @@
+import select
+import time
 import websockets, json, asyncio, serial, cv2, socket, subprocess
 from aiortc.sdp import candidate_from_sdp
 from aiortc import RTCPeerConnection, RTCSessionDescription
-
+from aiortc.contrib.media import MediaPlayer
 
 ###### CÁC HÀM DÙNG CHUNG #####
 
@@ -104,19 +106,24 @@ async def signaling_loop_pro(pc: RTCPeerConnection,
                                 "sdp": pc.localDescription.sdp,
                                 "sdpType": pc.localDescription.type,
                             }))
+                            print("sent offer")
                     elif t == "peer-joined":
                         peer = msg["peer"]
                         print(f"[{role}] Peer joined: {peer}")
                         if role == "publisher" and pc.signalingState == "stable":
                             # khi có viewer mới -> gửi offer
+                            print("creating offer")
                             offer = await pc.createOffer()
+                            print("created offer")
                             await pc.setLocalDescription(offer)
+                            print("set offer")
                             await ws.send(json.dumps({
                                 "type": "offer",
                                 "to": peer,
                                 "sdp": pc.localDescription.sdp,
                                 "sdpType": pc.localDescription.type,
                             }))
+                            print("sent offer")
                     elif t == "offer" and role == "viewer":
                         frm = msg["from"]
                         print(f"[viewer] got offer from {frm}")
@@ -136,11 +143,12 @@ async def signaling_loop_pro(pc: RTCPeerConnection,
                         await pc.setRemoteDescription(answer)
                     elif t == "candidate":
                         try:
-                            cand = {
-                                "candidate": msg["candidate"],
-                                "sdpMid": msg.get("sdpMid"),
-                                "sdpMLineIndex": msg.get("sdpMLineIndex"),
-                            }
+                            # cand = {
+                            #     "candidate": msg["candidate"],
+                            #     "sdpMid": msg.get("sdpMid"),
+                            #     "sdpMLineIndex": msg.get("sdpMLineIndex"),
+                            # }
+                            cand = candidate_from_sdp(msg["candidate"].split("\n")[0])
                             await pc.addIceCandidate(cand)
                         except Exception as e:
                             print("Failed to add ICE:", e)
@@ -160,7 +168,7 @@ async def signaling_loop_pro(pc: RTCPeerConnection,
         
         
 # ====== Gửi ping - chờ pong ======
-async def heartbeat_task(channel, lost_event):
+async def heartbeat_task(channel, lost_event: asyncio.Event):
     ping_count = 0
     
     @channel.on("message")
@@ -189,28 +197,24 @@ async def heartbeat_task(channel, lost_event):
 ##### CÁC HÀM DÀNH CHO PUBLISHER #####
 
 # ====== đọc từ uart rồi gửi đi ======
-async def uart_reader(channel, COM_port: str, baudrate: int):
-    ser = serial.Serial(COM_port, baudrate=baudrate, timeout=1)
-    ser.reset_input_buffer() 
-    ser.reset_output_buffer() 
-    print(f"[Publisher] UART opened at {COM_port} {baudrate}")
-    loop = asyncio.get_event_loop()
+async def uart_reader(channel, ser: serial.Serial):
     data = b''
     try:
         while True:
-            if ser.in_waiting > 0:
-                byte = await loop.run_in_executor(None, ser.read)
+            while ser.in_waiting > 0:
+                byte = ser.read()
                 data = data + byte
+
+            if channel.readyState == "open":
+                if len(data) != 0:
+                    channel.send(data)
+                    # print("[Publisher] Sent UART -> webrtc", data)
             else:
-                if channel.readyState == "open":
-                    if len(data) != 0:
-                        channel.send(data)
-                        print("[Publisher] Sent UART -> webrtc", data)
-                else:
-                    print("[Publisher] No channel to send")
-                    ser.close()
-                    break
-                data = b''
+                print("[Publisher] No channel to send")
+                ser.close()
+                break
+            data = b''
+            asyncio.sleep(0.005)
     except asyncio.CancelledError:
         print("[Publisher] UART reader cancelled")
     finally:
@@ -223,6 +227,102 @@ async def send_periodic(channel):
             msg = b"\x01\x08\xA5\x5B\x68"
             channel.send(msg)
         await asyncio.sleep(2)  # gửi mỗi vài giây
+
+# ====== Track có khả năng reconnect ======
+class ReconnectableTrack(VideoStreamTrack):
+    def __init__(self, url):
+        super().__init__()
+        self.url = url
+        self.player = None
+        self._ensure_player()
+
+    def _ensure_player(self):
+        if self.player is None:
+            print("Creating MediaPlayer...")
+            self.player = MediaPlayer("rtp://0.0.0.0:40005",   # listen UDP 40005
+                                      format="mpegts",         # vì trong RTP chứa TS
+                                      options={
+                                          "protocol_whitelist": "file,udp,rtp",  # cho phép udp/rtp
+                                          "fflags": "nobuffer",
+                                          "flags": "low_delay",
+                                          "max_delay": "0",
+                                          "reorder_queue_size": "0",
+                                          "stimeout": "5000000",
+                                      },
+                                      decode=True)
+            print("Done")
+
+    async def recv(self):
+        while True:
+            try:
+                self._ensure_player()
+                frame = await self.player.video.recv()
+                return frame
+            except Exception as e:
+                print(f"Camera lost: {e}, reconnecting...")
+                if self.player:
+                    await self.player.stop()
+                self.player = None
+                await asyncio.sleep(2)
+
+# ====== Forward rtp (chưa hoạt động) ======        
+class RtpForwardTrack(MediaStreamTrack):
+    kind = "video"
+
+    def __init__(self, port=40005, queue_size=100):
+        super().__init__()
+        self.port = port
+        self.queue = asyncio.Queue(maxsize=queue_size)
+        self.transport_task = None
+        
+    async def start(self):
+        """gọi sau khi có loop"""
+        if self.transport_task is None:
+            self.transport_task = asyncio.create_task(self._run())
+
+    async def _run(self):
+        loop = asyncio.get_event_loop()
+        sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        sock.bind(("0.0.0.0", self.port))
+        sock.setblocking(False)
+
+        print(f"Listening for RTP on 0.0.0.0:{self.port}")
+        while True:
+            data, _ = await loop.sock_recvfrom(sock, 65535)
+            # nếu queue đầy thì bỏ gói cũ
+            if self.queue.full():
+                try:
+                    _ = self.queue.get_nowait()
+                except asyncio.QueueEmpty:
+                    pass
+            await self.queue.put(data)
+
+    async def recv(self):
+        # lấy raw rtp từ queue
+        data = await self.queue.get()
+
+        # tạo packet giả định là H264 (để aiortc hiểu)
+        packet = av.packet.Packet(data)
+        packet.stream = av.stream.Stream(codec_context=av.codec.CodecContext.create("h264", "r"))
+
+        # trả packet thô (không decode)
+        return packet
+        
+# ====== Track giả phát frame đen ======
+class BlackFrameTrack(MediaStreamTrack):
+    kind = "video"
+
+    def __init__(self, width=640, height=480):
+        super().__init__()  
+        self.width = width
+        self.height = height
+
+    async def recv(self):
+        pts, time_base = await self.next_timestamp()
+        frame = av.VideoFrame(self.width, self.height, 'yuv420p')
+        frame.pts = pts
+        frame.time_base = time_base
+        return frame
 
 ##### CÁC HÀM DÀNH CHO VIEWER #####
 
@@ -255,25 +355,42 @@ async def send_video_packet_udp(track, udp_sock: socket.socket, GCS_IP: str, VID
             print("UDP send error: ", e)
             
 # ====== nhận lệnh điều khiển từ udp rồi gửi đi ======
-async def send_command_from_gcs(channel, udp_sock: socket.socket):
+async def send_command_from_gcs(channel, lost_event: asyncio.Event, udp_sock: socket.socket, GCS_IP: str, TELEM_PORT: int):
     udp_sock.setblocking(False)
-    loop = asyncio.get_event_loop()
+
+    # gửi lần đầu
+    udp_sock.sendto(b"Hello GCS", (GCS_IP, TELEM_PORT))
+    last_recv_time = time.time()
 
     while True:
+        if lost_event.is_set():
+            break
         try:
-            packet, _ = await asyncio.wait_for(
-                loop.sock_recvfrom(udp_sock, 65535),
-                timeout=1.0
-            )
-            if channel.readyState == "open":
-                channel.send(packet)
-                print("[Viewer] Sent command ->", packet)
+            # kiểm tra có dữ liệu trong buffer không
+            rlist, _, _ = select.select([udp_sock], [], [], 0)
+            if rlist:
+                packet, addr = udp_sock.recvfrom(65535)
+                last_recv_time = time.time()   # cập nhật thời gian nhận
+
+                if channel.readyState == "open":
+                    channel.send(packet)
+                    # print("[Viewer] GCS Sent command ->", packet)
+                else:
+                    print("[Viewer] No channel to send") 
             else:
-                print("[Viewer] No channel to send")
-        except asyncio.TimeoutError:
-            continue
+                await asyncio.sleep(0.005)
+
+            # 🔥 Nếu 1 giây chưa nhận được packet nào -> gửi lại Hello
+            if time.time() - last_recv_time >= 2.0:
+                udp_sock.sendto(b"Hello GCS", (GCS_IP, TELEM_PORT))
+                print("[UDP] Resent Hello GCS")
+                last_recv_time = time.time()
+
+            await asyncio.sleep(0.1)
+
         except Exception as e:
-            pass
+            print("[UDP exception]:", e) 
+            await asyncio.sleep(1)
             
 async def opencv_to_gstreamer(track):
     gst_cmd = (

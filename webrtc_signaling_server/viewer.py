@@ -56,13 +56,13 @@ async def run(GCS_IP: str, timeout: int):
             
         # Tạo kênh gửi dữ liệu
         command_channel = pc.createDataChannel("gcs_command")
-        heartbeat_channel = pc.createDataChannel("heartbeat_viewer")
+        # heartbeat_channel = pc.createDataChannel("heartbeat_viewer")
         
         # COMMAND CHANNEL
         @command_channel.on("open")
         def on_open():
             print("command channel opened")
-            asyncio.ensure_future(send_command_from_gcs(command_channel, udp_sock))
+            asyncio.ensure_future(send_command_from_gcs(command_channel, lost_event, udp_sock, GCS_IP, TELEMETRY_PORT))
             
         @command_channel.on("close")
         def on_close():
@@ -75,14 +75,14 @@ async def run(GCS_IP: str, timeout: int):
 
             @channel.on("message")
             def on_message(message):
-                if channel.label == "heartbeat_publisher":
-                    if message == "ping":
-                        # print(f"Got ping from {channel.label} channel, sending pong")
-                        try:
-                            channel.send(f"pong")
-                        except Exception as e:
-                            print(f"{channel.label} channel send error: ", e)
-                elif channel.label == "telemetry":
+                # if channel.label == "heartbeat_publisher":
+                #     if message == "ping":
+                #         # print(f"Got ping from {channel.label} channel, sending pong")
+                #         try:
+                #             channel.send(f"pong")
+                #         except Exception as e:
+                #             print(f"{channel.label} channel send error: ", e)
+                if channel.label == "telemetry":
                     # print(f"Got data from {channel.label} channel, forwarding udp")
                     try:
                         if not isinstance(message, bytes):
@@ -99,15 +99,15 @@ async def run(GCS_IP: str, timeout: int):
                 # lost_event.set()
 
         # HEARTBEAT CHANNEL
-        @heartbeat_channel.on("open")
-        def on_open():
-            print("Heartbeat channel opened")
-            asyncio.ensure_future(heartbeat_task(heartbeat_channel, lost_event))
+        # @heartbeat_channel.on("open")
+        # def on_open():
+        #     print("Heartbeat channel opened")
+        #     asyncio.ensure_future(heartbeat_task(heartbeat_channel, lost_event))
             
-        @heartbeat_channel.on("close")
-        def on_close():
-            print("[Viewer] Heartbeat channel closed")
-            # lost_event.set() 
+        # @heartbeat_channel.on("close")
+        # def on_close():
+        #     print("[Viewer] Heartbeat channel closed")
+        #     lost_event.set() 
 
         # nhận được track video thì hiển thị hoặc là gửi cho thiết bị khác qua udp
         @pc.on("track")

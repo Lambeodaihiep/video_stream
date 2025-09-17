@@ -1,14 +1,10 @@
-import argparse, serial, asyncio, websockets, json, cv2
+import argparse, serial, asyncio, websockets, json, cv2, time
 from aiortc import RTCPeerConnection, RTCSessionDescription
 from aiortc import RTCConfiguration, RTCIceServer
-from aiortc.contrib.media import MediaPlayer, MediaRelay
+from aiortc.contrib.media import MediaPlayer
 from aiortc.sdp import candidate_from_sdp, candidate_to_sdp
 from aiortc.codecs import get_capabilities
-from utils import (signaling_loop,
-                   uart_reader,
-                   heartbeat_task,
-                   send_periodic,
-                   signaling_loop_pro)
+from utils import signaling_loop, uart_reader, send_periodic, signaling_loop_pro, BlackFrameTrack
 from config import *
 
 # cái này để ép server dùng codec h264
@@ -19,17 +15,63 @@ role = "publisher"
 # ====== Camera IP ======
 #rtsp_url = "rtsp://192.168.0.101:8080/h264.sdp"
 #rtsp_url = "rtsp://192.168.0.107:8554/test"
-#rtsp_url = "rtsp://admin:123456a%40@192.168.5.69:554/Streaming/Channels/101"
+rtsp_url = "rtsp://admin:123456a%40@192.168.5.69:554/Streaming/Channels/101"
 # rtsp_url = "rtsp://admin:123456!Vht@192.168.1.120:18554/h264"
 
-async def run(player: {None, MediaPlayer}, uart: str, COM_port: str, baudrate: int, timeout: int):
+async def run(camera: str, uart: str, COM_port: str, baudrate: int, timeout: int):
     pc = None
     ser = None
+    player = None
     try:
         # Tạo peer connection
         pc = RTCPeerConnection(RTCConfiguration(iceServers=ice_servers))
         lost_event = asyncio.Event()
+        
+        # Dùng track giả để không block signaling
+        black_track = BlackFrameTrack()
+        sender = pc.addTrack(black_track)
+        
+        if camera == "on":
+            # kiểm tra RTSP camera bằng opencv trước
+            #cap = cv2.VideoCapture(rtsp_url)
+            #if not cap.isOpened():
+            #    print("RTSP camera not available. Try again ...")
+            #    return "no_camera"
+            #cap.release()
 
+            # Tùy chọn FFmpeg để ổn định & giảm trễ
+            # - rtsp_transport: "tcp" (ổn định) hoặc "udp" (độ trễ thấp hơn nếu mạng tốt)
+            # - stimeout: timeout socket (microseconds)
+            # - fflags=nobuffer/flags=low_delay: giảm đệm
+            # player = MediaPlayer(
+                # rtsp_url,
+                # format="rtsp",
+                # options={
+                    # "rtsp_transport": "udp",
+                    # "stimeout": "5000000",
+                    # "fflags": "nobuffer",
+                    # "flags": "low_delay",
+                    # "max_delay": "0",
+                    # "framedrop": "1",
+                # },
+                # decode=False
+            # )
+            print(f"[{time.time()}] reading camera")
+            player = MediaPlayer(
+                "rtp://0.0.0.0:40005",   # listen UDP 40005
+                format="mpegts",         # vì trong RTP chứa TS
+                options={
+                    "protocol_whitelist": "file,udp,rtp",  # cho phép udp/rtp
+                    "fflags": "nobuffer",
+                    "flags": "low_delay",
+                    "max_delay": "0",
+                    "reorder_queue_size": "0",
+                    "stimeout": "1000000",
+                },
+                decode=False
+            )
+            print(f"[{time.time()}] camera ok")
+        
         # kiểm tra tình trạng kết nối
         @pc.on("connectionstatechange")
         async def on_state_change():
@@ -60,10 +102,11 @@ async def run(player: {None, MediaPlayer}, uart: str, COM_port: str, baudrate: i
         # thêm track để gửi đi
         if player is not None and player.video:
             print("hehehehe")
-            pc.addTrack(player.video)
+            #pc.addTrack(player.video)
+            sender.replaceTrack(player.video)
             # Ép server codec h264
-            transceiver = pc.getTransceivers()[0]
-            transceiver.setCodecPreferences(h264_codecs)
+        transceiver = pc.getTransceivers()[0]
+        transceiver.setCodecPreferences(h264_codecs)
         # else:
         #     print("No video track from RTSP!")
         #     return "no_camera"
@@ -84,7 +127,7 @@ async def run(player: {None, MediaPlayer}, uart: str, COM_port: str, baudrate: i
         # TELEMETRY CHANNEL
         @telemetry_channel.on("open")
         def on_open():
-            print("Telemetry channel opened")
+            print(f"[{time.time()}] Telemetry channel opened")
             #asyncio.ensure_future(send_periodic(telemetry_channel))
             if ser is not None:
                 asyncio.ensure_future(uart_reader(telemetry_channel, ser))
@@ -100,7 +143,7 @@ async def run(player: {None, MediaPlayer}, uart: str, COM_port: str, baudrate: i
             
         @pc.on("datachannel")
         def on_datachannel(channel):
-            print("Data channel received:", channel.label)
+            print(f"[{time.time()}] Data channel received:", channel.label)
 
             @channel.on("message")
             def on_message(message):
@@ -142,19 +185,17 @@ async def run(player: {None, MediaPlayer}, uart: str, COM_port: str, baudrate: i
         print("Peer connection lost -> rebuild peer")
         await pc.close()        # đóng peer cũ
         print("pc closed")
-        return "retry", player
+        return "retry"
     
     except Exception as e:
         print("Error:", e)
-        return "retry", player
+        return "retry"
     
     finally:
-        print("cleaning ...")
         if pc is not None:
             await pc.close()
-        #if player is not None:
-        #    player.video.stop()
-        print("done cleaning")
+        if player is not None:
+            player.video.stop()
 
 
 # ====== main ======
@@ -179,48 +220,8 @@ async def main():
     )
     args = parser.parse_args()
 
-    player = None
-    if args.camera == "on":
-        # kiểm tra RTSP camera bằng opencv trước
-        #cap = cv2.VideoCapture(rtsp_url)
-        #if not cap.isOpened():
-        #    print("RTSP camera not available. Try again ...")
-        #    return "no_camera"
-        #cap.release()
-
-        # Tùy chọn FFmpeg để ổn định & giảm trễ
-        # - rtsp_transport: "tcp" (ổn định) hoặc "udp" (độ trễ thấp hơn nếu mạng tốt)
-        # - stimeout: timeout socket (microseconds)
-        # - fflags=nobuffer/flags=low_delay: giảm đệm
-        # player = MediaPlayer(
-            # rtsp_url,
-            # format="rtsp",
-            # options={
-                # "rtsp_transport": "udp",
-                # "stimeout": "5000000",
-                # "fflags": "nobuffer",
-                # "flags": "low_delay",
-                # "max_delay": "0",
-                # "framedrop": "1",
-            # },
-            # decode=False
-        # )
-        player = MediaPlayer(
-          "rtp://0.0.0.0:40005",   # listen UDP 40005
-          format="mpegts",         # vì trong RTP chứa TS
-          options={
-              "protocol_whitelist": "file,udp,rtp",  # cho phép udp/rtp
-              "fflags": "nobuffer",
-              "flags": "low_delay",
-              "max_delay": "0",
-              "reorder_queue_size": "0",
-              "stimeout": "5000000",
-          },
-          decode=False
-        )
-
     while True:
-        result, player = await run(player, args.uart, args.COM_port, args.baudrate, args.timeout)
+        result = await run(args.camera, args.uart, args.COM_port, args.baudrate, args.timeout)
         if result in ["retry", "no_camera"]:
             if result == "retry":
                 print("Got retry, retrying ...")
@@ -231,4 +232,5 @@ async def main():
 
 
 if __name__ == "__main__":
+    print(f"[{time.time()}] starting")
     asyncio.run(main())
