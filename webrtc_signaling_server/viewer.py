@@ -131,6 +131,11 @@ async def run(GCS_IP: str, timeout: int):
         signaling_task.cancel()
         udp_sock.close()
         print("Peer connection lost -> rebuild peer")
+        for transceiver in pc.getTransceivers():
+            if transceiver.receiver.track:
+                await transceiver.receiver.track.stop()
+        for sender in pc.getSenders():
+            await sender.stop()
         await pc.close()        # đóng peer cũ
         print("pc closed")
         return "retry"
