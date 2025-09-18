@@ -4,7 +4,14 @@ from aiortc import RTCConfiguration, RTCIceServer
 from aiortc.contrib.media import MediaPlayer
 from aiortc.sdp import candidate_from_sdp, candidate_to_sdp
 from aiortc.codecs import get_capabilities
-from utils import signaling_loop, uart_reader, signaling_loop_pro, BlackFrameTrack
+from utils import (signaling_loop,
+                   uart_reader,
+                   signaling_loop_pro,
+                   BlackFrameTrack,
+                   rtsp_track,
+                   udp_unicast_track,
+                   udp_multicast_track,
+                   send_telemetry_from_udp)
 from config import *
 
 # cái này để ép server dùng codec h264
@@ -18,18 +25,25 @@ role = "publisher"
 rtsp_url = "rtsp://admin:123456a%40@192.168.5.69:554/Streaming/Channels/101"
 # rtsp_url = "rtsp://admin:123456!Vht@192.168.1.120:18554/h264"
 
-async def run(camera: str, uart: str, COM_port: str, baudrate: int, timeout: int):
+# ====== UDP ======
+udp_unicast_port = 40005
+udp_multicast_group = "232.4.130.147"
+
+async def run(camera: str, AP: str, COM_port: str, baudrate: int, timeout: int):
     pc = None
     ser = None
-    camera_source = None
+    camera_source_1 = None
+    camera_source_2 = None
     try:
         # Tạo peer connection
         pc = RTCPeerConnection(RTCConfiguration(iceServers=ice_servers))
         lost_event = asyncio.Event()
         
         # Dùng track giả để không block signaling
-        black_track = BlackFrameTrack()
-        sender = pc.addTrack(black_track)
+        black_track_1 = BlackFrameTrack()
+        black_track_2 = BlackFrameTrack()
+        sender_1 = pc.addTrack(black_track_1)
+        sender_2 = pc.addTrack(black_track_2)
         
         if camera == "on":
             print(f"[{time.time()}] reading camera")
@@ -40,50 +54,12 @@ async def run(camera: str, uart: str, COM_port: str, baudrate: int, timeout: int
                # return "no_camera"
             # cap.release()
 
-            # Tùy chọn FFmpeg để ổn định & giảm trễ
-            # - rtsp_transport: "tcp" (ổn định) hoặc "udp" (độ trễ thấp hơn nếu mạng tốt)
-            # - stimeout: timeout socket (microseconds)
-            # - fflags=nobuffer/flags=low_delay: giảm đệm
-            # camera_source = MediaPlayer(
-                # rtsp_url,
-                # format="rtsp",
-                # options={
-                    # "rtsp_transport": "udp",
-                    # "stimeout": "5000000",
-                    # "fflags": "nobuffer",
-                    # "flags": "low_delay",
-                    # "max_delay": "0",
-                    # "framedrop": "1",
-                    # "reorder_queue_size": "0",
-                    # "analyzeduration": "0",
-                    # "probesize": "32",
-                # },
-                # decode=False
-            # )
+            camera_source_2 = rtsp_track(rtsp_url)
+            print(f"[{time.time()}] camera 1 ok")
             
-            camera_source = MediaPlayer(
-                "rtp://0.0.0.0:40005",   # listen UDP 40005
-                format="mpegts",         # vì trong RTP chứa TS
-                options={
-                    "protocol_whitelist": "file,udp,rtp",  # cho phép udp/rtp
-                    "fflags": "nobuffer",
-                    "flags": "low_delay",
-                    "max_delay": "0",
-                    "reorder_queue_size": "0",
-                    "stimeout": "1000000",
-                },
-                decode=False
-            )
-            print(f"[{time.time()}] camera ok")
+            camera_source_1 = udp_unicast_track(udp_unicast_port)
+            print(f"[{time.time()}] camera 2 ok")
             
-            video_source = MediaPlayer(
-                "test.mp4",
-                decode=True,  # giải mã video
-                options={
-                    "protocol_whitelist": "file,udp,rtp"
-                }
-            )
-            print(f"[{time.time()}] video ok")
         
         # kiểm tra tình trạng kết nối
         @pc.on("connectionstatechange")
@@ -113,25 +89,23 @@ async def run(camera: str, uart: str, COM_port: str, baudrate: int, timeout: int
                     print("Failed to send ICE candidate:", e)
 
         # thêm track để gửi đi
-        if camera_source is not None and camera_source.video:
+        if camera_source_1 is not None and camera_source_1.video:
             print("hehehehe 1")
-            pc.addTrack(camera_source.video)
-            #sender.replaceTrack(camera_source.video)
+            camera_source_1.video._id = "cam1"
+            #pc.addTrack(camera_source.video)
+            sender_1.replaceTrack(camera_source_1.video)
             
-        if video_source is not None and video_source.video:
+        if camera_source_2 is not None and camera_source_2.video:
             print("hehehehe 2")
-            pc.addTrack(video_source.video)
+            camera_source_2.video._id = "cam2"
+            #pc.addTrack(video_source.video)
+            sender_2.replaceTrack(camera_source_2.video)
         # Ép server codec h264
-        transceiver = pc.getTransceivers()[0]
-        transceiver.setCodecPreferences(h264_codecs)
-        # else:
-        #     print("No video track from RTSP!")
-        #     return "no_camera"
-        
+        for transceiver in pc.getTransceivers():
+            transceiver.setCodecPreferences(h264_codecs)
         
         # mở kênh serial
-        #print(uart)
-        if uart == "on":
+        if AP == "uart":
             ser = serial.Serial(COM_port, baudrate=baudrate, timeout=1)
             ser.reset_input_buffer() 
             ser.reset_output_buffer() 
@@ -148,6 +122,9 @@ async def run(camera: str, uart: str, COM_port: str, baudrate: int, timeout: int
             #asyncio.ensure_future(send_periodic(telemetry_channel))
             if ser is not None:
                 asyncio.ensure_future(uart_reader(telemetry_channel, ser))
+            if AP == "udp":
+                print("siuuu")
+                asyncio.ensure_future(send_telemetry_from_udp(telemetry_channel, lost_event, udp_multicast_group, 40004))
 
         @telemetry_channel.on("message")
         def on_message(message):
@@ -175,7 +152,6 @@ async def run(camera: str, uart: str, COM_port: str, baudrate: int, timeout: int
                     print(f"{channel.label} channel got: {message}, sending to uart")
                     if ser is not None:
                         ser.write(message)
-                    
                 
             @channel.on("close")
             def on_close():
@@ -217,8 +193,10 @@ async def run(camera: str, uart: str, COM_port: str, baudrate: int, timeout: int
         print("Cleaning ...", end=" ")
         if pc is not None:
             await pc.close()
-        if camera_source is not None:
-            camera_source.video.stop()
+        if camera_source_1 is not None:
+            camera_source_1.video.stop()
+        if camera_source_2 is not None:
+            camera_source_2.video.stop()
         print("Done")
 
 
@@ -231,7 +209,7 @@ async def main():
         "--camera", type=str, default="off"
     )
     parser.add_argument(
-        "--uart", type=str, default="off", help="pass 'uart' or 'udp'"
+        "--AP", type=str, default="off", help="pass 'uart' or 'udp' or 'off'"
     )
     parser.add_argument(
         "--COM_port", default="/dev/ttyACM0"
@@ -245,7 +223,7 @@ async def main():
     args = parser.parse_args()
 
     while True:
-        result = await run(args.camera, args.uart, args.COM_port, args.baudrate, args.timeout)
+        result = await run(args.camera, args.AP, args.COM_port, args.baudrate, args.timeout)
         if result in ["retry", "no_camera"]:
             if result == "retry":
                 print("Got retry, retrying ...")

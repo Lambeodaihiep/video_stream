@@ -1,6 +1,6 @@
 import select
 import time
-import websockets, json, asyncio, serial, cv2, socket, subprocess, av
+import websockets, json, asyncio, serial, cv2, socket, subprocess, av, struct
 from aiortc.sdp import candidate_from_sdp
 from aiortc import RTCPeerConnection, RTCSessionDescription, VideoStreamTrack, MediaStreamTrack
 from aiortc.contrib.media import MediaPlayer
@@ -324,6 +324,95 @@ class BlackFrameTrack(MediaStreamTrack):
         frame.time_base = time_base
         return frame
 
+# ====== rtsp_track ======
+def rtsp_track(rtsp_url: str):
+    # Tùy chọn FFmpeg để ổn định & giảm trễ
+    # - rtsp_transport: "tcp" (ổn định) hoặc "udp" (độ trễ thấp hơn nếu mạng tốt)
+    # - stimeout: timeout socket (microseconds)
+    # - fflags=nobuffer/flags=low_delay: giảm đệm
+    return MediaPlayer(
+               rtsp_url,
+               format="rtsp",
+               options={
+                   "rtsp_transport": "udp",
+                   "stimeout": "5000000",
+                   "fflags": "nobuffer",
+                   "flags": "low_delay",
+                   "max_delay": "0",
+                   "framedrop": "1",
+                   "reorder_queue_size": "0",
+                   "analyzeduration": "0",
+                   "probesize": "32",
+               },
+               decode=False
+            )
+            
+# ====== udp unicast track ======
+def udp_unicast_track(port: int):
+    return MediaPlayer(
+                f"rtp://0.0.0.0:{port}",   # listen UDP 40005
+                format="mpegts",         # vì trong RTP chứa TS
+                options={
+                    "protocol_whitelist": "file,udp,rtp",  # cho phép udp/rtp
+                    "fflags": "nobuffer",
+                    "flags": "low_delay",
+                    "max_delay": "0",
+                    "reorder_queue_size": "0",
+                    "stimeout": "1000000",
+                },
+                decode=False
+            )
+
+# ====== udp multicast track ======
+def udp_multicast_track(udp_multicast_group: str, port: int):
+    return MediaPlayer(
+                f"udp://@{udp_multicast_group}:{port}",   # listen UDP 40005
+                format="mpegts",         # vì trong RTP chứa TS
+                options={
+                    "protocol_whitelist": "file,udp,rtp",  # cho phép udp/rtp
+                    "fflags": "nobuffer",
+                    "flags": "low_delay",
+                    "max_delay": "0",
+                    "reorder_queue_size": "0",
+                    "stimeout": "1000000",
+                    # nếu cần chỉ định card mạng để join multicast:
+                    # "localaddr": "192.168.1.10",   # IP local của NIC
+                },
+                decode=False
+            )
+            
+# ====== send telemetry from udp ======
+async def send_telemetry_from_udp(channel, lost_event: asyncio.Event, udp_multicast_group: str, port: int):
+    # Tạo UDP socket
+    udp_sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM, socket.IPPROTO_UDP)
+    udp_sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+
+    # Bind vào port multicast
+    udp_sock.bind((udp_multicast_group, port))   # "" = lắng nghe trên tất cả interface
+    
+    # Tham gia multicast group
+    mreq = struct.pack("4sl", socket.inet_aton(udp_multicast_group), socket.INADDR_ANY)
+    udp_sock.setsockopt(socket.IPPROTO_IP, socket.IP_ADD_MEMBERSHIP, mreq)
+    
+    print("Listening telemetry from udp multicast...")
+    while True:
+        if lost_event.is_set():
+            udp_sock.close()
+            break
+            
+        try:
+            packet, addr = udp_sock.recvfrom(65535)
+            
+            if channel.readyState == "open":
+                channel.send(packet)
+                print("[Publisher] sending telemetry data ->", packet)
+            else:
+                print("[Publisher] No channel to send") 
+            
+        except Exception as e:
+            print("[UDP exception]:", e) 
+            await asyncio.sleep(1)
+
 ##### CÁC HÀM DÀNH CHO VIEWER #####
 
 # ====== hiển thị bằng opencv ======
@@ -340,16 +429,6 @@ async def opencv_display(track):
             print("Track error: ", e)
             break
     cv2.destroyAllWindows()
-    
-# ====== hiển thị bằng opencv ======
-async def opencv_multi_display(track):
-    if track.kind == "video":
-        @track.on("frame")
-        def on_frame(frame):
-            img = frame.to_ndarray(format="bgr24")
-            cv2.imshow(f"Track {track.id}", img)
-            cv2.waitKey(1) 
-    #cv2.destroyAllWindows()
 
 # ====== Gửi hết video packet qua UDP ======
 async def send_video_packet_udp(track, udp_sock: socket.socket, GCS_IP: str, VIDEO_PORT: int):
