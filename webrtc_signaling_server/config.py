@@ -2,6 +2,12 @@ from aiortc import RTCIceServer
 
 ##### CONFIG CHUNG #####
 
+# ====== UDP multicast ======
+# ====== UDP ======
+udp_unicast_port = 40005
+udp_multicast_group = "232.4.130.147"
+udp_multicast_telemetry_port = 40004
+
 # ====== SIGNALING SERVER ======
 # SIGNALING_SERVER = "ws://dev.bitsec.it:8889"
 SIGNALING_SERVER = "ws://171.224.83.50:8889"

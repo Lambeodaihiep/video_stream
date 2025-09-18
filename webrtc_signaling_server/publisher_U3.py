@@ -25,10 +25,6 @@ role = "publisher"
 rtsp_url = "rtsp://admin:123456a%40@192.168.5.69:554/Streaming/Channels/101"
 # rtsp_url = "rtsp://admin:123456!Vht@192.168.1.120:18554/h264"
 
-# ====== UDP ======
-udp_unicast_port = 40005
-udp_multicast_group = "232.4.130.147"
-
 async def run(camera: str, AP: str, COM_port: str, baudrate: int, timeout: int):
     pc = None
     ser = None
@@ -54,10 +50,10 @@ async def run(camera: str, AP: str, COM_port: str, baudrate: int, timeout: int):
                # return "no_camera"
             # cap.release()
 
-            camera_source_2 = rtsp_track(rtsp_url)
+            camera_source_1 = rtsp_track(rtsp_url)
             print(f"[{time.time()}] camera 1 ok")
             
-            camera_source_1 = udp_unicast_track(udp_unicast_port)
+            camera_source_2 = udp_unicast_track(udp_unicast_port)
             print(f"[{time.time()}] camera 2 ok")
             
         
@@ -123,8 +119,7 @@ async def run(camera: str, AP: str, COM_port: str, baudrate: int, timeout: int):
             if ser is not None:
                 asyncio.ensure_future(uart_reader(telemetry_channel, ser))
             if AP == "udp":
-                print("siuuu")
-                asyncio.ensure_future(send_telemetry_from_udp(telemetry_channel, lost_event, udp_multicast_group, 40004))
+                asyncio.ensure_future(send_telemetry_from_udp(telemetry_channel, lost_event, udp_multicast_group, udp_multicast_telemetry_port))
 
         @telemetry_channel.on("message")
         def on_message(message):

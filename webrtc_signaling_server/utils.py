@@ -394,24 +394,24 @@ async def send_telemetry_from_udp(channel, lost_event: asyncio.Event, udp_multic
     mreq = struct.pack("4sl", socket.inet_aton(udp_multicast_group), socket.INADDR_ANY)
     udp_sock.setsockopt(socket.IPPROTO_IP, socket.IP_ADD_MEMBERSHIP, mreq)
     
+    udp_sock.setblocking(False)
+    loop = asyncio.get_running_loop()
     print("Listening telemetry from udp multicast...")
-    while True:
-        if lost_event.is_set():
-            udp_sock.close()
-            break
             
-        try:
-            packet, addr = udp_sock.recvfrom(65535)
-            
-            if channel.readyState == "open":
-                channel.send(packet)
-                print("[Publisher] sending telemetry data ->", packet)
-            else:
-                print("[Publisher] No channel to send") 
-            
-        except Exception as e:
-            print("[UDP exception]:", e) 
-            await asyncio.sleep(1)
+    try:
+        while not lost_event.is_set():
+            try:
+                packet, addr = await loop.sock_recvfrom(udp_sock, 65535)
+                if channel.readyState == "open":
+                    channel.send(packet)
+                    print("[Publisher] sending telemetry data ->", packet)
+                else:
+                    print("[Publisher] No channel to send") 
+            except Exception as e:
+                print("[UDP exception]:", e)
+                await asyncio.sleep(1)
+    finally:
+        udp_sock.close()
 
 ##### CÁC HÀM DÀNH CHO VIEWER #####
 
@@ -444,11 +444,11 @@ async def send_video_packet_udp(track, udp_sock: socket.socket, GCS_IP: str, VID
             print("UDP send error: ", e)
             
 # ====== nhận lệnh điều khiển từ udp rồi gửi đi ======
-async def send_command_from_gcs(channel, lost_event: asyncio.Event, udp_sock: socket.socket, GCS_IP: str, TELEM_PORT: int):
+async def send_command_from_gcs(channel, lost_event: asyncio.Event, udp_sock: socket.socket, GCS_IP: str, TELEMETRY_PORT: int):
     udp_sock.setblocking(False)
 
     # gửi lần đầu
-    udp_sock.sendto(b"Hello GCS", (GCS_IP, TELEM_PORT))
+    udp_sock.sendto(b"Hello GCS", (GCS_IP, TELEMETRY_PORT))
     last_recv_time = time.time()
 
     while True:
@@ -471,7 +471,7 @@ async def send_command_from_gcs(channel, lost_event: asyncio.Event, udp_sock: so
 
             # 🔥 Nếu 1 giây chưa nhận được packet nào -> gửi lại Hello
             if time.time() - last_recv_time >= 2.0:
-                udp_sock.sendto(b"Hello GCS", (GCS_IP, TELEM_PORT))
+                udp_sock.sendto(b"Hello GCS", (GCS_IP, TELEMETRY_PORT))
                 print("[UDP] Resent Hello GCS")
                 last_recv_time = time.time()
 
@@ -514,3 +514,23 @@ async def opencv_to_gstreamer(track, lost_event: asyncio.Event):
             print(f"[opencv_display] Exception: {e}")
 
     cv2.destroyAllWindows()
+    
+def GCS_telemetry_data(udp_sock: socket.socket, message, GCS_IP: str, TELEMETRY_PORT: int):
+    try:
+        if not isinstance(message, bytes):
+            data = message.tobytes()
+            udp_sock.sendto(data, (GCS_IP, TELEMETRY_PORT))
+        else:
+            udp_sock.sendto(message, (GCS_IP, TELEMETRY_PORT))
+    except Exception as e:
+        print("UDP send error: ", e)
+     
+def multicast_telemetry_data(udp_sock: socket.socket, message, udp_multicast_group: str, port: int):
+    try:
+        if not isinstance(message, bytes):
+            data = message.tobytes()
+            udp_sock.sendto(data, (udp_multicast_group, port))
+        else:
+            udp_sock.sendto(message, (udp_multicast_group, port))
+    except Exception as e:
+        print("UDP send error: ", e)

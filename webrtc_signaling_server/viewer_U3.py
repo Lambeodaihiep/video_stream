@@ -3,13 +3,14 @@ from aiortc import RTCPeerConnection, RTCSessionDescription
 from aiortc import RTCConfiguration, RTCIceServer
 from aiortc.sdp import candidate_from_sdp, candidate_to_sdp
 from utils import (signaling_loop,
-                   opencv_display,
-                   opencv_multi_display,
+                   opencv_display,                   
                    send_video_packet_udp,
                    heartbeat_task,
                    send_command_from_gcs,
                    opencv_to_gstreamer,
-                   signaling_loop_pro)
+                   signaling_loop_pro,
+                   GCS_telemetry_data,
+                   multicast_telemetry_data)
 from config import *
 
 # ====== GCS PORT ======
@@ -20,6 +21,8 @@ role = "viewer"
 
 async def run(GCS_IP: str, timeout: int):
     pc = None
+    GCS_udp_sock = None
+    multicast_udp_sock = None
     try:
         pc = RTCPeerConnection(RTCConfiguration(iceServers=ice_servers))
         lost_event = asyncio.Event()        # gọi set() khi cần retry
@@ -53,22 +56,25 @@ async def run(GCS_IP: str, timeout: int):
                     print("Failed to send ICE candidate: ", e)
                     
         # ====== mở cổng udp ======
-        udp_sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        # GCS_udp_sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        
+        multicast_udp_sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM, socket.IPPROTO_UDP)
+        multicast_udp_sock.setsockopt(socket.IPPROTO_IP, socket.IP_MULTICAST_TTL, 2)
             
         # Tạo kênh gửi dữ liệu
-        command_channel = pc.createDataChannel("gcs_command")
+        # command_channel = pc.createDataChannel("gcs_command")
         # heartbeat_channel = pc.createDataChannel("heartbeat_viewer")
         
-        # COMMAND CHANNEL
-        @command_channel.on("open")
-        def on_open():
-            print("command channel opened")
-            asyncio.ensure_future(send_command_from_gcs(command_channel, lost_event, udp_sock, GCS_IP, TELEMETRY_PORT))
+        # COMMAND CHANNEL - temporary not use
+        # @command_channel.on("open")
+        # def on_open():
+            # print("command channel opened")
+            # asyncio.ensure_future(send_command_from_gcs(command_channel, lost_event, GCS_udp_sock, GCS_IP, TELEMETRY_PORT))
             
-        @command_channel.on("close")
-        def on_close():
-            print("[Viewer] Heartbeat channel closed")
-            # lost_event.set() 
+        # @command_channel.on("close")
+        # def on_close():
+            # print("[Viewer] Heartbeat channel closed")
+            # # lost_event.set() 
 
         @pc.on("datachannel")
         def on_datachannel(channel):
@@ -84,15 +90,11 @@ async def run(GCS_IP: str, timeout: int):
                 #         except Exception as e:
                 #             print(f"{channel.label} channel send error: ", e)
                 if channel.label == "telemetry":
-                    # print(f"Got data from {channel.label} channel, forwarding udp")
-                    try:
-                        if not isinstance(message, bytes):
-                            data = message.tobytes()
-                            udp_sock.sendto(data, (GCS_IP, TELEMETRY_PORT))
-                        else:
-                            udp_sock.sendto(message, (GCS_IP, TELEMETRY_PORT))
-                    except Exception as e:
-                        print("UDP send error: ", e)
+                    print(f"Got data from {channel.label} channel, forwarding udp")
+                    if GCS_udp_sock is not None:
+                        GCS_telemetry_data(GCS_udp_sock, message, GCS_IP, TELEMETRY_PORT)
+                    if multicast_udp_sock is not None:
+                        multicast_telemetry_data(multicast_udp_sock, message, udp_multicast_group, udp_multicast_telemetry_port)
                 
             @channel.on("close")
             def on_close():
@@ -115,9 +117,8 @@ async def run(GCS_IP: str, timeout: int):
         def on_track(track):
             print("[Viewer] Track received, track kind: ", track.kind, "ID: ", track.id)
             #asyncio.ensure_future(opencv_display(track))
-            asyncio.ensure_future(opencv_multi_display(track))
             # asyncio.ensure_future(opencv_to_gstreamer(track))
-            # asyncio.ensure_future(send_video_packet_udp(track, udp_sock, GCS_IP, VIDEO_PORT))
+            # asyncio.ensure_future(send_video_packet_udp(track, GCS_udp_sock, GCS_IP, VIDEO_PORT))
             
             @track.on("ended")
             def _ended():
@@ -131,7 +132,10 @@ async def run(GCS_IP: str, timeout: int):
         # chờ cho tới khi PC mất
         await lost_event.wait()
         signaling_task.cancel()
-        udp_sock.close()
+        if GCS_udp_sock is not None:
+            GCS_udp_sock.close()
+        if multicast_udp_sock is not None:
+            multicast_udp_sock.close()
         print("Peer connection lost -> rebuild peer")
         for transceiver in pc.getTransceivers():
             if transceiver.receiver.track:
