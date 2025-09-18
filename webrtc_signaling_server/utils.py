@@ -340,6 +340,16 @@ async def opencv_display(track):
             print("Track error: ", e)
             break
     cv2.destroyAllWindows()
+    
+# ====== hiển thị bằng opencv ======
+async def opencv_multi_display(track):
+    if track.kind == "video":
+        @track.on("frame")
+        def on_frame(frame):
+            img = frame.to_ndarray(format="bgr24")
+            cv2.imshow(f"Track {track.id}", img)
+            cv2.waitKey(1) 
+    #cv2.destroyAllWindows()
 
 # ====== Gửi hết video packet qua UDP ======
 async def send_video_packet_udp(track, udp_sock: socket.socket, GCS_IP: str, VIDEO_PORT: int):
