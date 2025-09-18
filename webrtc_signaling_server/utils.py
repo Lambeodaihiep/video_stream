@@ -392,17 +392,29 @@ async def send_command_from_gcs(channel, lost_event: asyncio.Event, udp_sock: so
             print("[UDP exception]:", e) 
             await asyncio.sleep(1)
             
-async def opencv_to_gstreamer(track):
+async def opencv_to_gstreamer(track, lost_event: asyncio.Event):
     gst_cmd = (
         "gst-launch-1.0 -v fdsrc ! rawvideoparse format=bgr width=1920 height=1080 framerate=30/1 "
-        "! videoconvert ! x264enc tune=zerolatency  speed-preset=ultrafast "
+        "! videoconvert ! x264enc tune=zerolatency  speed-preset=ultrafast key-int-max=30 bframes=0 "
         "! rtph264pay config-interval=1 pt=96 ! udpsink host=127.0.0.1 port=5002" 
     )
     gst_proc = subprocess.Popen(gst_cmd, shell=True, stdin=subprocess.PIPE)
     while True:
+        if lost_event.is_set():
+            gst_proc.kill()
+            break
         try:
             frame = await track.recv()
+            if frame is None: 
+                await asyncio.sleep(0.01)
+                continue  
+
             img = frame.to_ndarray(format="bgr24")
+
+            if img is None or img.size == 0:
+                await asyncio.sleep(0.01)
+                continue  
+
             # resized = cv2.resize(img, (640, 480))
             # ghi ra pipe cho gstreamer
             gst_proc.stdin.write(img.tobytes())
