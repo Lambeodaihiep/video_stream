@@ -94,7 +94,8 @@ async def run(GCS_IP: str, timeout: int):
                     if GCS_udp_sock is not None:
                         GCS_telemetry_data(GCS_udp_sock, message, GCS_IP, TELEMETRY_PORT)
                     if multicast_udp_sock is not None:
-                        multicast_telemetry_data(multicast_udp_sock, message, udp_multicast_group, udp_multicast_telemetry_port)
+                        multicast_telemetry_data(multicast_udp_sock, message, udp_multicast_group, udp_multicast_telemetry_port+1)
+                        #multicast_telemetry_data(multicast_udp_sock, message, "225.1.2.3", 11024)
                 
             @channel.on("close")
             def on_close():

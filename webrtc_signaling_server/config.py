@@ -7,6 +7,7 @@ from aiortc import RTCIceServer
 udp_unicast_port = 40005
 udp_multicast_group = "232.4.130.147"
 udp_multicast_telemetry_port = 40004
+eth0_ip_address = "192.168.0.11"
 
 # ====== SIGNALING SERVER ======
 # SIGNALING_SERVER = "ws://dev.bitsec.it:8889"

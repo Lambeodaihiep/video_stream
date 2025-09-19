@@ -364,25 +364,32 @@ def udp_unicast_track(port: int):
             )
 
 # ====== udp multicast track ======
-def udp_multicast_track(udp_multicast_group: str, port: int):
-    return MediaPlayer(
-                f"udp://@{udp_multicast_group}:{port}",   # listen UDP 40005
-                format="mpegts",         # vì trong RTP chứa TS
-                options={
-                    "protocol_whitelist": "file,udp,rtp",  # cho phép udp/rtp
-                    "fflags": "nobuffer",
-                    "flags": "low_delay",
-                    "max_delay": "0",
-                    "reorder_queue_size": "0",
-                    "stimeout": "1000000",
-                    # nếu cần chỉ định card mạng để join multicast:
-                    # "localaddr": "192.168.1.10",   # IP local của NIC
-                },
-                decode=False
-            )
+def udp_multicast_track(udp_multicast_group: str, port: int, eth_ip_address: str):
+    # return MediaPlayer(
+                # f"udp://@{udp_multicast_group}:{port}",   # listen UDP 40005
+                # format="mpegts",         # vì trong RTP chứa TS
+                # options={
+                    # "protocol_whitelist": "file,udp,rtp",  # cho phép udp/rtp
+                    # "fflags": "nobuffer",
+                    # "flags": "low_delay",
+                    # "max_delay": "0",
+                    # "reorder_queue_size": "0",
+                    # "stimeout": "1000000",
+                    # # nếu cần chỉ định card mạng để join multicast:
+                    # # "localaddr": eth_ip_address,   # IP local của NIC
+                # },
+                # decode=False
+            # )
+    return MediaPlayer("stream.sdp",
+                      format="sdp",
+                        options={
+                            "protocol_whitelist": "file,crypto,data,udp,rtp",
+                            "localaddr": eth_ip_address,  # IP của eth0
+                        }
+                    )
             
 # ====== send telemetry from udp ======
-async def send_telemetry_from_udp(channel, lost_event: asyncio.Event, udp_multicast_group: str, port: int):
+async def send_telemetry_from_udp(channel, lost_event: asyncio.Event, udp_multicast_group: str, port: int, eth_ip_address: str):
     # Tạo UDP socket
     udp_sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM, socket.IPPROTO_UDP)
     udp_sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
@@ -391,7 +398,10 @@ async def send_telemetry_from_udp(channel, lost_event: asyncio.Event, udp_multic
     udp_sock.bind((udp_multicast_group, port))   # "" = lắng nghe trên tất cả interface
     
     # Tham gia multicast group
+    # thông qua wlan0
     mreq = struct.pack("4sl", socket.inet_aton(udp_multicast_group), socket.INADDR_ANY)
+    # thông qua eth0
+    #mreq = struct.pack('4s4s', socket.inet_aton(udp_multicast_group), socket.inet_aton(eth_ip_address))
     udp_sock.setsockopt(socket.IPPROTO_IP, socket.IP_ADD_MEMBERSHIP, mreq)
     
     udp_sock.setblocking(False)

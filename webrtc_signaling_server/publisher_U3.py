@@ -53,7 +53,8 @@ async def run(camera: str, AP: str, COM_port: str, baudrate: int, timeout: int):
             camera_source_1 = rtsp_track(rtsp_url)
             print(f"[{time.time()}] camera 1 ok")
             
-            camera_source_2 = udp_unicast_track(udp_unicast_port)
+            #camera_source_2 = udp_unicast_track(udp_unicast_port)
+            camera_source_2 = udp_multicast_track("225.1.2.3", 11024, eth0_ip_address)
             print(f"[{time.time()}] camera 2 ok")
             
         
@@ -119,7 +120,7 @@ async def run(camera: str, AP: str, COM_port: str, baudrate: int, timeout: int):
             if ser is not None:
                 asyncio.ensure_future(uart_reader(telemetry_channel, ser))
             if AP == "udp":
-                asyncio.ensure_future(send_telemetry_from_udp(telemetry_channel, lost_event, udp_multicast_group, udp_multicast_telemetry_port))
+                asyncio.ensure_future(send_telemetry_from_udp(telemetry_channel, lost_event, udp_multicast_group, udp_multicast_telemetry_port, eth0_ip_address))
 
         @telemetry_channel.on("message")
         def on_message(message):
