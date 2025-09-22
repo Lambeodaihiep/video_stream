@@ -57,7 +57,7 @@ async def run(GCS_IP: str, timeout: int):
                     print("Failed to send ICE candidate: ", e)
                     
         # ====== mở cổng udp ======
-        GCS_udp_sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        # GCS_udp_sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
         
         multicast_telemetry_sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM, socket.IPPROTO_UDP)
         multicast_telemetry_sock.setsockopt(socket.IPPROTO_IP, socket.IP_MULTICAST_TTL, 2)
@@ -138,7 +138,7 @@ async def run(GCS_IP: str, timeout: int):
         if GCS_udp_sock is not None:
             GCS_udp_sock.close()
         if multicast_telemetry_sock is not None:
-            multicast_udp_sock.close()
+            multicast_telemetry_sock.close()
         print("Peer connection lost -> rebuild peer")
         for transceiver in pc.getTransceivers():
             if transceiver.receiver.track:

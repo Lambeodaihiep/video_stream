@@ -419,7 +419,7 @@ async def send_telemetry_from_udp(channel, lost_event: asyncio.Event, udp_multic
                 packet, addr = await loop.sock_recvfrom(udp_sock, 65535)
                 if channel.readyState == "open":
                     channel.send(packet)
-                    print("[Publisher] sending telemetry data ->", packet)
+                    #print("[Publisher] sending telemetry data ->", packet)
                 else:
                     print("[Publisher] No channel to send") 
             except Exception as e:
@@ -508,7 +508,7 @@ async def send_command_from_gcs_client(channel, lost_event: asyncio.Event, udp_s
         try:
             # kiểm tra có dữ liệu trong buffer không
             rlist, _, _ = select.select([udp_sock], [], [], 0)
-            if rlist:
+            while rlist:
                 packet, addr = udp_sock.recvfrom(65535)
 
                 if channel.readyState == "open":
@@ -516,10 +516,8 @@ async def send_command_from_gcs_client(channel, lost_event: asyncio.Event, udp_s
                     #print("[Viewer] GCS Sent command ->", packet)
                 else:
                     print("[Viewer] No channel to send") 
-            else:
-                await asyncio.sleep(0.005)
-
-            await asyncio.sleep(0.1)
+                rlist, _, _ = select.select([udp_sock], [], [], 0)
+            await asyncio.sleep(0.005)
 
         except Exception as e:
             print("[UDP exception]:", e) 

@@ -55,7 +55,7 @@ async def run(camera: str, AP: str, COM_port: str, baudrate: int, timeout: int):
             #camera_source_1 = rtsp_track(rtsp_url)
             #print(f"[{time.time()}] camera 1 ok")
             
-            camera_source_2 = udp_unicast_track(udp_unicast_port)
+            camera_source_2 = udp_unicast_track(udp_unicast_video_port)
             #camera_source_2 = udp_multicast_track("225.1.2.3", 11024, eth0_ip_address)
             print(f"[{time.time()}] camera 2 ok")
             
@@ -109,7 +109,7 @@ async def run(camera: str, AP: str, COM_port: str, baudrate: int, timeout: int):
             ser.reset_input_buffer() 
             ser.reset_output_buffer() 
             print(f"[Publisher] UART opened at {COM_port} {baudrate}")
-        # mở kênh udp multicast
+        # mở kênh udp multicast để gửi lệnh từ GCS bắn lên
         elif AP == "udp":
             unicast_command_sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM, socket.IPPROTO_UDP)
             unicast_command_sock.setsockopt(socket.IPPROTO_IP, socket.IP_MULTICAST_TTL, 2)
@@ -122,11 +122,12 @@ async def run(camera: str, AP: str, COM_port: str, baudrate: int, timeout: int):
         @telemetry_channel.on("open")
         def on_open():
             print(f"[{time.time()}] Telemetry channel opened")
-            #asyncio.ensure_future(send_periodic(telemetry_channel))
+            # đọc telemetry từ uart rồi gửi đi
             if ser is not None:
                 asyncio.ensure_future(uart_reader(telemetry_channel, ser))
-            #if AP == "udp":
-                #asyncio.ensure_future(send_telemetry_from_udp(telemetry_channel, lost_event, udp_multicast_group, udp_multicast_telemetry_port, eth0_ip_address))
+            # đọc telemetry từ udp multicast rồi gửi đi
+            if AP == "udp":
+                asyncio.ensure_future(send_telemetry_from_udp(telemetry_channel, lost_event, udp_multicast_group, udp_multicast_telemetry_port, eth0_ip_address))
 
         @telemetry_channel.on("message")
         def on_message(message):
@@ -151,12 +152,10 @@ async def run(camera: str, AP: str, COM_port: str, baudrate: int, timeout: int):
                             # print(f"{channel.label} channel send error: {e}")
 
                 if channel.label == "gcs_command":
-                    print(f"{channel.label} channel got: {message}")
+                    print(f"{channel.label} channel got: {message}, sending to {AP}")
                     if ser is not None:
-                        print(f"sending to {AP}")
                         ser.write(message)
                     if unicast_command_sock is not None:
-                        print(f"sending to {AP}")
                         unicast_data_udp(unicast_command_sock, message, "192.168.1.14", udp_unicast_command_port)
                 
             @channel.on("close")
