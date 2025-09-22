@@ -1,4 +1,4 @@
-import argparse, serial, asyncio, websockets, json, cv2, time
+import argparse, serial, asyncio, websockets, json, cv2, time, socket
 from aiortc import RTCPeerConnection, RTCSessionDescription
 from aiortc import RTCConfiguration, RTCIceServer
 from aiortc.contrib.media import MediaPlayer
@@ -11,7 +11,8 @@ from utils import (signaling_loop,
                    rtsp_track,
                    udp_unicast_track,
                    udp_multicast_track,
-                   send_telemetry_from_udp)
+                   send_telemetry_from_udp,
+                   unicast_data_udp)
 from config import *
 
 # cái này để ép server dùng codec h264
@@ -28,6 +29,7 @@ rtsp_url = "rtsp://admin:123456a%40@192.168.5.69:554/Streaming/Channels/101"
 async def run(camera: str, AP: str, COM_port: str, baudrate: int, timeout: int):
     pc = None
     ser = None
+    unicast_command_sock = None
     camera_source_1 = None
     camera_source_2 = None
     try:
@@ -50,11 +52,11 @@ async def run(camera: str, AP: str, COM_port: str, baudrate: int, timeout: int):
                # return "no_camera"
             # cap.release()
 
-            camera_source_1 = rtsp_track(rtsp_url)
-            print(f"[{time.time()}] camera 1 ok")
+            #camera_source_1 = rtsp_track(rtsp_url)
+            #print(f"[{time.time()}] camera 1 ok")
             
-            #camera_source_2 = udp_unicast_track(udp_unicast_port)
-            camera_source_2 = udp_multicast_track("225.1.2.3", 11024, eth0_ip_address)
+            camera_source_2 = udp_unicast_track(udp_unicast_port)
+            #camera_source_2 = udp_multicast_track("225.1.2.3", 11024, eth0_ip_address)
             print(f"[{time.time()}] camera 2 ok")
             
         
@@ -101,12 +103,16 @@ async def run(camera: str, AP: str, COM_port: str, baudrate: int, timeout: int):
         for transceiver in pc.getTransceivers():
             transceiver.setCodecPreferences(h264_codecs)
         
-        # mở kênh serial
+        # mở kênh serial 
         if AP == "uart":
             ser = serial.Serial(COM_port, baudrate=baudrate, timeout=1)
             ser.reset_input_buffer() 
             ser.reset_output_buffer() 
             print(f"[Publisher] UART opened at {COM_port} {baudrate}")
+        # mở kênh udp multicast
+        elif AP == "udp":
+            unicast_command_sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM, socket.IPPROTO_UDP)
+            unicast_command_sock.setsockopt(socket.IPPROTO_IP, socket.IP_MULTICAST_TTL, 2)
 
         # Tạo kênh gửi dữ liệu
         telemetry_channel = pc.createDataChannel("telemetry")
@@ -119,8 +125,8 @@ async def run(camera: str, AP: str, COM_port: str, baudrate: int, timeout: int):
             #asyncio.ensure_future(send_periodic(telemetry_channel))
             if ser is not None:
                 asyncio.ensure_future(uart_reader(telemetry_channel, ser))
-            if AP == "udp":
-                asyncio.ensure_future(send_telemetry_from_udp(telemetry_channel, lost_event, udp_multicast_group, udp_multicast_telemetry_port, eth0_ip_address))
+            #if AP == "udp":
+                #asyncio.ensure_future(send_telemetry_from_udp(telemetry_channel, lost_event, udp_multicast_group, udp_multicast_telemetry_port, eth0_ip_address))
 
         @telemetry_channel.on("message")
         def on_message(message):
@@ -145,9 +151,13 @@ async def run(camera: str, AP: str, COM_port: str, baudrate: int, timeout: int):
                             # print(f"{channel.label} channel send error: {e}")
 
                 if channel.label == "gcs_command":
-                    print(f"{channel.label} channel got: {message}, sending to uart")
+                    print(f"{channel.label} channel got: {message}")
                     if ser is not None:
+                        print(f"sending to {AP}")
                         ser.write(message)
+                    if unicast_command_sock is not None:
+                        print(f"sending to {AP}")
+                        unicast_data_udp(unicast_command_sock, message, "192.168.1.14", udp_unicast_command_port)
                 
             @channel.on("close")
             def on_close():
