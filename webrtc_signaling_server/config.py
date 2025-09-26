@@ -4,11 +4,8 @@ from aiortc import RTCIceServer
 
 # ====== UDP multicast ======
 # ====== UDP ======
-udp_unicast_video_port = 40005
-udp_multicast_group = "232.4.130.147"
+udp_multicast_telemetry_address = "232.4.130.147"
 udp_multicast_telemetry_port = 40002
-udp_unicast_command_port = 40001
-eth0_ip_address = "192.168.1.11"
 
 # ====== SIGNALING SERVER ======
 # SIGNALING_SERVER = "ws://dev.bitsec.it:8889"
@@ -24,7 +21,7 @@ TURN_USER     = "siuuu"
 TURN_PASS     = "1123581321"
 
 # thời gian thiết lập lại peer connection
-PC_RETRY_TIME = 1
+PC_RETRY_TIME = 2
 
 ice_servers = [
     #RTCIceServer(urls=["stun:stun.l.google.com:19302"])
@@ -34,7 +31,13 @@ ice_servers = [
 
 
 ##### CONFIG CHO PUBLISHER #####
+eth0_ip_address = "192.168.1.111"
+udp_unicast_video_port = 40005
 
+udp_unicast_command_address = "192.168.1.14"
+udp_unicast_command_port = 40001
 
+udp_multicast_video_address = "225.1.2.3"
+udp_multicast_video_port = 11024
 
 ##### CONFIG CHO VIEWER

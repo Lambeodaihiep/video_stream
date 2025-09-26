@@ -366,32 +366,38 @@ def udp_unicast_track(port: int):
 
 # ====== udp multicast track ======
 def udp_multicast_track(udp_multicast_group: str, port: int, eth_ip_address: str):
-    # return MediaPlayer(
-                # f"udp://@{udp_multicast_group}:{port}",   # listen UDP 40005
-                # format="mpegts",         # vì trong RTP chứa TS
-                # options={
-                    # "protocol_whitelist": "file,udp,rtp",  # cho phép udp/rtp
-                    # "fflags": "nobuffer",
-                    # "flags": "low_delay",
-                    # "max_delay": "0",
-                    # "reorder_queue_size": "0",
-                    # "stimeout": "1000000",
-                    # # nếu cần chỉ định card mạng để join multicast:
-                    # # "localaddr": eth_ip_address,   # IP local của NIC
-                # },
-                # decode=False
-            # )
-    return MediaPlayer("stream.sdp",
+    player = None
+    # try:
+    #     player = MediaPlayer(
+    #         f"rtp://@{udp_multicast_group}:{port}",
+    #         format="rtp",
+    #         timeout=5,
+    #         options={
+    #             "protocol_whitelist": "file,udp,rtp",  # cho phép udp/rtp
+    #             "fflags": "nobuffer",
+    #             "flags": "low_delay",
+    #             "max_delay": "0",
+    #             "reorder_queue_size": "0",
+    #             "stimeout": "1000000",
+    #             # nếu cần chỉ định card mạng để join multicast:
+    #             # "localaddr": eth_ip_address,   # IP local của NIC
+    #         },
+    #         decode=False,
+    #     )
+    # except Exception as e:
+    #     print("Stream error:", e)
+    #     return "error"
+
+    player = MediaPlayer("stream.sdp",
                       format="sdp",
                         options={
                             "protocol_whitelist": "file,crypto,data,udp,rtp",
-                            #"hwaccel": "drm",
-                            "c:v": "h264_v4l2m2m",
-                            "preset": "veryfast",
-                            "tune": "zerolatency",
+                            
                             "localaddr": eth_ip_address,  # IP của eth0
                         }
                     )
+
+    return player
             
 # ====== send telemetry from udp ======
 async def send_telemetry_from_udp(channel, lost_event: asyncio.Event, udp_multicast_group: str, port: int, eth_ip_address: str):

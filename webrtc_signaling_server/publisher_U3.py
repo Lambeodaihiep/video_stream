@@ -26,7 +26,7 @@ role = "publisher"
 rtsp_url = "rtsp://admin:123456a%40@192.168.5.69:554/Streaming/Channels/101"
 # rtsp_url = "rtsp://admin:123456!Vht@192.168.1.120:18554/h264"
 
-async def run(camera: str, AP: str, COM_port: str, baudrate: int, timeout: int):
+async def run(camera: str, telemetry: str, COM_port: str, baudrate: int, command:str, timeout: int):
     pc = None
     ser = None
     unicast_command_sock = None
@@ -55,9 +55,12 @@ async def run(camera: str, AP: str, COM_port: str, baudrate: int, timeout: int):
             #camera_source_1 = rtsp_track(rtsp_url)
             #print(f"[{time.time()}] camera 1 ok")
             
-            camera_source_2 = udp_unicast_track(udp_unicast_video_port)
-            #camera_source_2 = udp_multicast_track("225.1.2.3", 11024, eth0_ip_address)
-            print(f"[{time.time()}] camera 2 ok")
+            # camera_source_2 = udp_unicast_track(udp_unicast_video_port)
+            camera_source_2 = udp_multicast_track(udp_multicast_video_address, udp_multicast_video_port, eth0_ip_address)
+            if camera_source_2 == "error":
+                lost_event.set()
+            else:
+                print(f"[{time.time()}] camera 2 ok")
             
         
         # kiểm tra tình trạng kết nối
@@ -104,13 +107,13 @@ async def run(camera: str, AP: str, COM_port: str, baudrate: int, timeout: int):
             transceiver.setCodecPreferences(h264_codecs)
         
         # mở kênh serial 
-        if AP == "uart":
+        if telemetry == "uart":
             ser = serial.Serial(COM_port, baudrate=baudrate, timeout=1)
             ser.reset_input_buffer() 
             ser.reset_output_buffer() 
             print(f"[Publisher] UART opened at {COM_port} {baudrate}")
         # mở kênh udp multicast để gửi lệnh từ GCS bắn lên
-        elif AP == "udp":
+        if command == "on":
             unicast_command_sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM, socket.IPPROTO_UDP)
             unicast_command_sock.setsockopt(socket.IPPROTO_IP, socket.IP_MULTICAST_TTL, 2)
 
@@ -126,8 +129,8 @@ async def run(camera: str, AP: str, COM_port: str, baudrate: int, timeout: int):
             if ser is not None:
                 asyncio.ensure_future(uart_reader(telemetry_channel, ser))
             # đọc telemetry từ udp multicast rồi gửi đi
-            if AP == "udp":
-                asyncio.ensure_future(send_telemetry_from_udp(telemetry_channel, lost_event, udp_multicast_group, udp_multicast_telemetry_port, eth0_ip_address))
+            if telemetry == "udp":
+                asyncio.ensure_future(send_telemetry_from_udp(telemetry_channel, lost_event, udp_multicast_telemetry_address, udp_multicast_telemetry_port, eth0_ip_address))
 
         @telemetry_channel.on("message")
         def on_message(message):
@@ -152,11 +155,11 @@ async def run(camera: str, AP: str, COM_port: str, baudrate: int, timeout: int):
                             # print(f"{channel.label} channel send error: {e}")
 
                 if channel.label == "gcs_command":
-                    print(f"{channel.label} channel got: {message}, sending to {AP}")
+                    print(f"{channel.label} channel got: {message}, sending to {telemetry}")
                     if ser is not None:
                         ser.write(message)
                     if unicast_command_sock is not None:
-                        unicast_data_udp(unicast_command_sock, message, "192.168.1.14", udp_unicast_command_port)
+                        unicast_data_udp(unicast_command_sock, message, udp_unicast_command_address, udp_unicast_command_port)
                 
             @channel.on("close")
             def on_close():
@@ -181,6 +184,14 @@ async def run(camera: str, AP: str, COM_port: str, baudrate: int, timeout: int):
         await lost_event.wait()
         signaling_task.cancel()
         print("Peer connection lost -> rebuild peer")
+        print("Cleaning ...", end=" ")
+        if camera_source_1 is not None:
+            camera_source_1.video.stop()
+        if camera_source_2 is not None:
+            camera_source_2.video.stop()
+        if unicast_command_sock is not None:
+            unicast_command_sock.close()
+        print("Done")
         #for transceiver in pc.getTransceivers():
         #    if transceiver.receiver.track:
         #        await transceiver.receiver.track.stop()
@@ -195,14 +206,7 @@ async def run(camera: str, AP: str, COM_port: str, baudrate: int, timeout: int):
         return "retry"
     
     finally:
-        print("Cleaning ...", end=" ")
-        if pc is not None:
-            await pc.close()
-        if camera_source_1 is not None:
-            camera_source_1.video.stop()
-        if camera_source_2 is not None:
-            camera_source_2.video.stop()
-        print("Done")
+        pass
 
 
 # ====== main ======
@@ -214,7 +218,7 @@ async def main():
         "--camera", type=str, default="off"
     )
     parser.add_argument(
-        "--AP", type=str, default="off", help="pass 'uart' or 'udp' or 'off'"
+        "--telemetry", type=str, default="off", help="pass 'uart' or 'udp' or 'off'"
     )
     parser.add_argument(
         "--COM_port", default="/dev/ttyACM0"
@@ -223,12 +227,15 @@ async def main():
         "--baudrate", type=int, default=115200
     )
     parser.add_argument(
+        "--command", type=str, default="off", help="turn on to send command from gcs"
+    )
+    parser.add_argument(
         "--timeout", type=int, default=3, help="Signaling server connecting timeout (default: 3s)"
     )
     args = parser.parse_args()
 
     while True:
-        result = await run(args.camera, args.AP, args.COM_port, args.baudrate, args.timeout)
+        result = await run(args.camera, args.telemetry, args.COM_port, args.baudrate, args.command, args.timeout)
         if result in ["retry", "no_camera"]:
             if result == "retry":
                 print("Got retry, retrying ...")

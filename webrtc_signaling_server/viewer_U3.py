@@ -57,7 +57,7 @@ async def run(GCS_IP: str, timeout: int):
                     print("Failed to send ICE candidate: ", e)
                     
         # ====== mở cổng udp ======
-        # GCS_udp_sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        GCS_udp_sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
         
         multicast_telemetry_sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM, socket.IPPROTO_UDP)
         multicast_telemetry_sock.setsockopt(socket.IPPROTO_IP, socket.IP_MULTICAST_TTL, 2)
@@ -93,10 +93,10 @@ async def run(GCS_IP: str, timeout: int):
                 #             print(f"{channel.label} channel send error: ", e)
                 if channel.label == "telemetry":
                     print(f"Got data from {channel.label} channel, forwarding udp")
-                    if GCS_udp_sock is not None:
-                        GCS_telemetry_data(GCS_udp_sock, message, GCS_IP, TELEMETRY_PORT)
+                    # if GCS_udp_sock is not None:
+                    #     GCS_telemetry_data(GCS_udp_sock, message, GCS_IP, TELEMETRY_PORT)
                     if multicast_telemetry_sock is not None:
-                        multicast_data_udp(multicast_telemetry_sock, message, udp_multicast_group, udp_multicast_telemetry_port)
+                        multicast_data_udp(multicast_telemetry_sock, message, udp_multicast_telemetry_address, udp_multicast_telemetry_port)
                         #multicast_data_udp(multicast_telemetry_sock, message, "225.1.2.3", 11024)
                 
             @channel.on("close")

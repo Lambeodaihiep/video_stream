@@ -9,4 +9,36 @@ gst-launch-1.0 rtspsrc location=rtsp://192.168.0.100:8080/h264.sdp ! rtph264depa
 gst-launch-1.0 udpsrc port=5001 ! decodebin ! autovideosink
 gst-launch-1.0 -v udpsrc port=5001 ! h264parse ! avdec_h264 ! videoconvert ! video/x-raw,format=BGRA ! autovideosink sync=false
 
-gst-launch-1.0 -v   udpsrc port=5002 caps="application/x-rtp, media=video, encoding-name=H264, payload=96" !   rtpjitterbuffer latency=200 !   rtph264depay ! h264parse ! avdec_h264 !   videoconvert ! video/x-raw,format=BGRA !   autovideosink sync=false
+gst-launch-1.0 -v udpsrc port=40005 caps="application/x-rtp" ! rtpjitterbuffer ! rtpmp2tdepay ! tsdemux ! h264parse ! avdec_h264 ! videoconvert ! autovideosink sync=false
+gst-launch-1.0 -v udpsrc port=5002 caps="application/x-rtp, media=video, encoding-name=H264, payload=96" !   rtpjitterbuffer latency=200 !   rtph264depay ! h264parse ! avdec_h264 !   videoconvert ! video/x-raw,format=BGRA !   autovideosink sync=false
+
+# h265 multicast
+gst-launch-1.0 videotestsrc ! videoconvert ! video/x-raw,width=1920,height=1080,framerate=30/1 ! x265enc bitrate=500000 ! h265parse ! rtph265pay config-interval=1 ! udpsink host=225.1.2.3 port=11024 multicast-iface="Ethernet 2"
+gst-launch-1.0 videotestsrc ! videoconvert ! video/x-raw,width=1920,height=1080,framerate=30/1 ! x264enc bitrate=500000 ! h264parse ! rtph264pay config-interval=1 ! udpsink host=225.1.2.3 port=11024 multicast-iface="Ethernet 2"
+
+# cpu h264 encode
+gst-launch-1.0 filesrc location="C:/Users/leduc/Downloads/FULLx2.mp4" ! decodebin ! videoconvert ! x264enc bitrate=500000 ! h264parse ! rtph264pay config-interval=1 ! filesink location=FULLx2.rtp
+gst-launch-1.0 filesrc location="C:/Users/leduc/Downloads/FULLx2.mp4" ! decodebin ! videoconvert ! x264enc bitrate=500000 ! h264parse ! mpegtsmux ! filesink location=FULLx2.rtp
+
+# cpu h265 encode
+gst-launch-1.0 filesrc location="C:/Users/leduc/Downloads/FULLx2.mp4" ! decodebin ! videoconvert ! x265enc bitrate=500000 ! h265parse ! rtph265pay config-interval=1 ! filesink location=FULLx2.rtp
+gst-launch-1.0 filesrc location="C:/Users/leduc/Downloads/FULLx2.mp4" ! decodebin ! videoconvert ! x265enc bitrate=500000 ! h265parse ! mpegtsmux ! filesink location=FULLx2.rtp
+
+# gpu h265 encode
+gst-launch-1.0 filesrc location="C:/Users/leduc/Downloads/FULLx2.mp4" ! decodebin ! videoconvert ! amfh265enc bitrate=5000 ! h265parse ! rtph265pay config-interval=1 ! filesink location=FULLx2.rtp
+
+# restream to multicast
+gst-launch-1.0 filesrc location="FULLx2.rtp" ! tsdemux ! h265parse ! rtph265pay config-interval=1 ! udpsink multicast-iface=eth0 host=225.1.2.3 port=11024
+
+# read from udp multicast
+# on linux
+gst-launch-1.0 udpsrc address=225.1.2.3 port=11024 multicast-iface=eth0 caps="application/x-rtp,media=video,encoding-name=H265,payload=96" ! rtph265depay ! h265parse ! avdec_h265 ! videoconvert ! autovideosink sync=false
+gst-launch-1.0 udpsrc address=225.1.2.3 port=11025 multicast-iface=eth0 caps="application/x-rtp,media=video,encoding-name=H264,payload=96" ! rtph264depay ! h264parse ! avdec_h264 ! videoconvert ! autovideosink sync=false
+# on window
+gst-launch-1.0 udpsrc address=225.1.2.3 port=11024 multicast-iface="Ethernet 2" caps="application/x-rtp,media=video,encoding-name=H265,payload=96" ! rtph265depay ! h265parse ! avdec_h265 ! videoconvert ! autovideosink sync=false
+gst-launch-1.0 udpsrc address=225.1.2.3 port=11024 multicast-iface="Ethernet 2" caps="application/x-rtp,media=video,encoding-name=H264,payload=96" ! rtph264depay ! h264parse ! avdec_h264 ! videoconvert ! autovideosink sync=false
+
+
+iperf3 -c 171.224.83.50 -p 6000 -t 300 -b5M -u -R
+
+sudo ip route add 224.0.0.0/4 dev eth0
